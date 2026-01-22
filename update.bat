@@ -1,37 +1,58 @@
 @echo off
 setlocal enabledelayedexpansion
 
+:: --- KONFIGURACE ---
 set "USER=Doomnick"
 set "REPO=Performance-Analyzer"
+set "ZIP_NAME=app_package.zip"
+set "EXE_NAME=Performance Analyzer.exe"
 set "HASH_FILE=file_hashes.txt"
-set "FILES=app.py;app.py processor.py;processor.py master_engine.py;master_engine.py graphics_engine.py;graphics_engine.py report_generator.py;report_generator.py templates/report_template.html;templates/report_template.html"
 
 echo ===========================================
-echo   PROBIHA AKTUALIZACE... Prosim cekejte.
+echo    AKTUALIZACE SYSTÉMU PERFORMANCE ANALYZER
 echo ===========================================
 
-:: Krátká pauza pro uvolnění souborů Pythonem
-timeout /t 2 >nul
+:: 1. Počkáme, až se aplikace Performance Analyzer úplně ukončí
+timeout /t 3 /nobreak > nul
 
-for %%A in (%FILES%) do (
-    for /f "tokens=1,2 delims=;" %%B in ("%%A") do (
-        set "R_PATH=%%B" & set "L_PATH=%%C"
-        
-        :: Stažení SHA a souboru
-        for /f "delims=" %%S in ('powershell -Command "(Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/%USER%/%REPO%/contents/!R_PATH!').sha"') do set "REMOTE_SHA=%%S"
-        
-        echo Aktualizuji: !L_PATH!
-        for %%D in (!L_PATH!) do if not exist "%%~dpD" mkdir "%%~dpD"
-        powershell -Command "Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/%USER%/%REPO%/main/!R_PATH!' -OutFile '!L_PATH!'"
-        
-        :: Zápis nového SHA
-        type "%HASH_FILE%" | findstr /V /C:"!R_PATH!:" > "%HASH_FILE%.tmp" 2>nul
-        echo !R_PATH!: !REMOTE_SHA!>> "%HASH_FILE%.tmp"
-        move /y "%HASH_FILE%.tmp" "%HASH_FILE%" >nul
-    )
+:: 2. Stáhneme nejnovější verzi ZIPu z GitHub Releases
+echo [1/4] Stahuji aktualizacni balicek...
+powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/%USER%/%REPO%/releases/latest/download/%ZIP_NAME%' -OutFile '%ZIP_NAME%'"
+
+if not exist "%ZIP_NAME%" (
+    echo [CHYBA] Nepodarilo se stahnout aktualizaci. Zkontrolujte pripojeni.
+    pause
+    exit
 )
 
-echo.
-echo Hotovo! Restartuji aplikaci...
-start "" "Spustit.bat"
+:: 3. Čištění starých souborů (kromě dat a updateru)
+echo [2/4] Pripravuji slozku...
+:: Smažeme vše kromě reportů, výsledků, temp_plots a updaterů
+for /d %%i in (*) do (
+    if /i not "%%i"=="reporty" if /i not "%%i"=="vysledky" if /i not "%%i"=="temp_plots" rd /s /q "%%i"
+)
+for %%i in (*) do (
+    if /i not "%%i"=="update.bat" if /i not "%%i"=="%ZIP_NAME%" if /i not "%%i"=="last_check_time.txt" del /q "%%i"
+)
+
+:: 4. Rozbalení nového ZIPu
+echo [3/4] Instaluji novou verzi...
+:: Windows 10/11 mají příkaz tar v základu
+tar -xf "%ZIP_NAME%"
+
+:: 5. Úklid a aktualizace HASH_FILE
+echo [4/4] Dokoncuji instalaci...
+del "%ZIP_NAME%"
+
+:: Získáme SHA z GitHubu znovu pro uložení do local_sha, aby aplikace věděla, že je aktuální
+for /f "delims=" %%S in ('powershell -Command "(Invoke-RestMethod -Uri 'https://api.github.com/repos/%USER%/%REPO%/contents/app.py').sha"') do set "REMOTE_SHA=%%S"
+echo app.py: !REMOTE_SHA!> "%HASH_FILE%"
+
+echo ===========================================
+echo    AKTUALIZACE DOKONČENA!
+echo ===========================================
+timeout /t 2 > nul
+
+:: Restartujeme přímo EXE
+start "" "%EXE_NAME%"
 exit
