@@ -9,7 +9,7 @@ set "EXE_NAME=Performance Analyzer.exe"
 set "HASH_FILE=file_hashes.txt"
 
 echo ===========================================
-echo    AKTUALIZACE SYSTÉMU PERFORMANCE ANALYZER
+echo    AKTUALIZACE SYSTEMU PERFORMANCE ANALYZER
 echo ===========================================
 
 :: 1. Počkáme, až se aplikace Performance Analyzer úplně ukončí
@@ -49,7 +49,7 @@ for /f "delims=" %%S in ('powershell -Command "(Invoke-RestMethod -Uri 'https://
 echo app.py: !REMOTE_SHA!> "%HASH_FILE%"
 
 echo ===========================================
-echo    AKTUALIZACE DOKONČENA!
+echo    AKTUALIZACE DOKONCENA!
 echo ===========================================
 timeout /t 2 > nul
 

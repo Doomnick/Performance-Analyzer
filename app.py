@@ -392,14 +392,22 @@ def server(input, output, session):
     @reactive.event(input.confirm_update)
     def run_update_process():
         ui.modal_remove()
-        print("[SYSTEM] Spoustim update.bat a ukoncuji aplikaci...")
+        # Získání správné cesty k baťáku uvnitř _internal
+        updater_path = get_resource_path("update.bat")
+        
         try:
-            # Spustí update.bat v novém okně
-            subprocess.Popen(["cmd", "/c", "start", "update.bat"], shell=True)
-            # Okamžité ukončení Pythonu, aby se uvolnil soubor app.py pro přepsání
+            # Spuštění baťáku s plnou cestou
+            subprocess.Popen(["cmd", "/c", "start", "", updater_path], shell=True)
             os._exit(0)
         except Exception as e:
             print(f"[CHYBA] Nepodarilo se spustit update.bat: {e}")
+                
+            try:
+                    # Spuštění baťáku s plnou cestou
+                    subprocess.Popen(["cmd", "/c", "start", "", updater_path], shell=True)
+                    os._exit(0)
+            except Exception as e:
+                    print(f"[CHYBA] Nepodarilo se spustit update.bat: {e}")
 
     def trigger_analysis():
         paths = detected_paths.get()
