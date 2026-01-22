@@ -178,7 +178,8 @@ def save_aggregate_results(data_list, team, main_folder, is_single=None):
         try:
             file_db = vysledky_base / f"{file_prefix}vysledek_{team}_{timestamp}.xlsx"
             pd.DataFrame(db_rows).to_excel(file_db, index=False)
-            logs.append(f"✅ Wingate excel uložen: {file_db.name}")
+            # ZMĚNA: Přidáno "v:" a absolutní cesta pro aktivaci tlačítek v app.py
+            logs.append(f"✅ Wingate excel uložen v: {file_db.absolute()}")
         except Exception as e:
             logs.append(f"❌ Chyba při ukládání Wingate excelu: {str(e)}")
 
@@ -213,7 +214,8 @@ def save_aggregate_results(data_list, team, main_folder, is_single=None):
             file_spiro = sp_dir / f"{file_prefix}spiro_vysledek_{team}_{timestamp}.xlsx"
             df_sp = pd.DataFrame(spiro_rows).sort_values(by="VO2max (ml/kg/min)", ascending=False)
             df_sp.to_excel(file_spiro, index=False)
-            logs.append(f"✅ Spiro excel uložen: {file_spiro.name}")
+            # ZMĚNA: Přidáno "v:" a absolutní cesta pro aktivaci tlačítek v app.py
+            logs.append(f"✅ Spiro excel uložen v: {file_spiro.absolute()}")
         except Exception as e:
             logs.append(f"❌ Chyba při ukládání spiro excelu: {str(e)}")
             

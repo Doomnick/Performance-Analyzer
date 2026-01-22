@@ -11,13 +11,13 @@ import subprocess
 import urllib.request
 import time
 import json
+import time
 from pathlib import Path
 from shiny import App, render, ui, reactive
-
-
 import processor      # Výpočty a kontrola dat
 import master_engine
 import sys
+
 
 def get_resource_path(relative_path):
     """ Získá cestu k souborům pro skript i pro zabalené .exe """
@@ -222,7 +222,7 @@ app_ui = ui.page_navbar(
             /* CESTA K PROJEKTU - BOX */
             .project-path-box {
                 background: #ffffff; border: 1px solid #d0e3ff; border-radius: 6px;
-                padding: 0px 12px; font-size: 0.8rem; color: #444;
+                padding: 5px 12px; font-size: 0.8rem; color: #444;
                 margin-bottom: 8px; display: flex; align-items: center;
                 justify-content: space-between; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
             }
@@ -287,8 +287,13 @@ app_ui = ui.page_navbar(
             ui.output_ui("table_container_ui")
         )
     ),
-    ui.nav_panel(
+   ui.nav_panel(
         "📝 Výsledky",
+        ui.card(
+            ui.card_header("Rychlé akce po exportu"),
+            ui.output_ui("dynamic_results_buttons"), # Container pro tlačítka
+            style="margin-bottom: 15px;"
+        ),
         ui.card(ui.card_header("Souhrnná statistika"), ui.div(ui.output_text_verbatim("category_stats_output"), class_="stats-log")),
         ui.card(ui.card_header("Průběh generování"), ui.div(ui.output_text_verbatim("generation_console_output"), class_="gen-console"))
     ),
@@ -310,9 +315,81 @@ app_ui = ui.page_navbar(
 )
 
 def server(input, output, session):
+    last_wingate_path = reactive.Value(None)
+    last_spiro_path = reactive.Value(None)
     main_folder_path = reactive.Value(""); detected_paths = reactive.Value({}); comparison_data = reactive.Value(None) 
     last_analysis_inputs = reactive.Value({}); selected_id = reactive.Value(None); gen_log = reactive.Value("Systém připraven...")
+   
+
+    @render.ui
+    def dynamic_results_buttons():
+        # Získání cest z reaktivních proměnných
+        w_path = last_wingate_path.get()
+        s_path = last_spiro_path.get()
+        base = main_folder_path.get()
+        
+        btns = []
+        
+        # Pokud byl vygenerován alespoň jeden výsledek, zobrazíme tlačítka
+        if w_path or s_path:
+            # 1. Tlačítko pro PDF reporty (vždy první)
+            btns.append(ui.input_action_button("open_pdf_folder", "📂 Složka PDF reportů", class_="btn-primary"))
+            
+            # 2. Specifické výsledky (Spiro nebo Wingate)
+            if w_path:
+                btns.append(ui.input_action_button("open_wingate_res", "📊 Otevřít Wingate (XLS)", class_="btn-success"))
+            if s_path:
+                btns.append(ui.input_action_button("open_spiro_res", "🫁 Otevřít Spiro (XLS)", class_="btn-success"))
+            
+            # 3. Složka s XLS výsledky (vždy poslední)
+            btns.append(ui.input_action_button("open_res_folder", "📁 Složka XLS výsledků", class_="btn-primary"))
+            
+            return ui.div(*btns, style="display: flex; gap: 10px; margin-top: 5px; flex-wrap: wrap;")
+        
+        return ui.p("Tlačítka se zobrazí po dokončení exportu.", style="color: gray; font-style: italic;")
+
+    @reactive.effect
+    @reactive.event(input.open_pdf_folder)    
+    def _open_pdf_fold():
+        # Cesta k PDF reportům je definována v master_engine jako složka "reporty"
+        base = main_folder_path.get()
+        if not base: return
+        
+        path = os.path.join(base, "reporty")
+        
+        if os.path.exists(path):
+            os.startfile(path)
+        else:
+            ui.notification_show("Složka s PDF reporty zatím neexistuje.", type="warning")
     
+    
+    @reactive.effect
+    @reactive.event(input.open_wingate_res)
+    def _open_w_res():
+        path = last_wingate_path.get()
+        if path and os.path.exists(path): os.startfile(path)
+
+    @reactive.effect
+    @reactive.event(input.open_spiro_res)
+    def _open_s_res():
+        path = last_spiro_path.get()
+        if path and os.path.exists(path): os.startfile(path)
+
+    @reactive.effect
+    @reactive.event(input.open_res_folder)
+    def _open_r_fold():
+        # Získáme cestu k vybranému projektu
+        base = main_folder_path.get()
+        if not base: return
+        
+        # Sestavíme cestu ke složce výsledků v rámci projektu
+        path = os.path.join(base, "vysledky")
+        
+        if os.path.exists(path):
+            os.startfile(path)
+        else:
+            ui.notification_show("Složka s výsledky zatím neexistuje.", type="warning")
+
     @reactive.effect
     def check_updates_at_startup():
         print("\n" + "="*45)
@@ -391,23 +468,23 @@ def server(input, output, session):
     @reactive.effect
     @reactive.event(input.confirm_update)
     def run_update_process():
+        import shutil
         ui.modal_remove()
-        # Získání správné cesty k baťáku uvnitř _internal
-        updater_path = get_resource_path("update.bat")
         
         try:
-            # Spuštění baťáku s plnou cestou
-            subprocess.Popen(["cmd", "/c", "start", "", updater_path], shell=True)
+            # 1. Cesta k updateru uvnitř _internal
+            source_bat = get_resource_path("update.bat")
+            # 2. Cesta do kořene (vedle .exe)
+            target_bat = os.path.join(os.getcwd(), "update.bat")
+            
+            # 3. Zkopírujeme ho ven
+            shutil.copy2(source_bat, target_bat)
+            
+            # 4. Spustíme ho z kořene
+            subprocess.Popen(["cmd", "/c", "start", "update.bat"], shell=True)
             os._exit(0)
         except Exception as e:
-            print(f"[CHYBA] Nepodarilo se spustit update.bat: {e}")
-                
-            try:
-                    # Spuštění baťáku s plnou cestou
-                    subprocess.Popen(["cmd", "/c", "start", "", updater_path], shell=True)
-                    os._exit(0)
-            except Exception as e:
-                    print(f"[CHYBA] Nepodarilo se spustit update.bat: {e}")
+            print(f"[CHYBA] Příprava aktualizace selhala: {e}")
 
     def trigger_analysis():
         paths = detected_paths.get()
@@ -486,7 +563,7 @@ def server(input, output, session):
     def _help():
         m = ui.modal(
             ui.h6("Pravidla automatické detekce:"),
-            ui.p("Pro úspěšnou detekci stačí, aby názvy podsložek v hlavní složce začínaly těmito slovy:"),
+            ui.p("Pro úspěšnou detekci stačí, aby názvy podsložek v hlavní složce začínaly těmito slovy. Nezáleží na velikosti písmen:"),
             ui.tags.ul(
                 ui.tags.li(ui.tags.b("Somato..."), " : Pro antropometrii. Musí obsahovat Excel s listem 'Data_Sheet'."),
                 ui.tags.li(ui.tags.b("Wingate..."), " : Pro wingate testy. Obsahuje .txt soubory pojmenované dle ID."),
@@ -505,7 +582,11 @@ def server(input, output, session):
         files = list(Path(spiro_dir).glob("*.xls*"))
         if files:
             try:
-                df_check = pd.read_excel(files[0], header=None, nrows=150)
+                # Načtení do paměti, aby se soubor hned uvolnil
+                import io
+                with open(files[0], "rb") as f:
+                    file_data = io.BytesIO(f.read())
+                df_check = pd.read_excel(file_data, header=None, nrows=150)
                 if any(df_check.iloc[:, 0].astype(str).str.strip().str.lower() == "v"): initial_val = "True"
             except: pass
         return ui.div(ui.input_radio_buttons("toggle_switch", "Metrika Spirometrie:", {"False": "Výkon (W)", "True": "Rychlost (km/h)"}, selected=initial_val, inline=True), style="margin-bottom: 2px;")
@@ -544,99 +625,116 @@ def server(input, output, session):
         df = comparison_data.get()
         if df is None or df.empty: return
         
-        ui.update_navset("main_nav", selected="📝 Výsledky")
+        # Reset starých cest před novým generováním
+        last_wingate_path.set(None)
+        last_spiro_path.set(None)
         
-        # Trvalá notifikace v rohu po dobu generování
+        ui.update_navset("main_nav", selected="📝 Výsledky")
         gen_id = ui.notification_show("Spouštím hromadné generování...", duration=None, type="message")
         
         try:
             with ui.Progress(min=0, max=1) as p:
-                p.set(message="Generuji reporty a tabulky...", detail="Zpracovávám grafy (může to trvat několik vteřin)")
+                p.set(message="Generuji reporty a tabulky...", detail="Zpracovávám grafy...")
                 
                 paths = detected_paths.get()
                 paths['main_folder'] = main_folder_path.get()
                 t_switch = input.toggle_switch() if "toggle_switch" in input else "False"
                 
-                # Zpracujeme všechny, kteří nejsou FAILED
+                # Volání engine
                 results = master_engine.run_multisession_generation(df, paths, input.sport(), input.team(), t_switch)
-                
+                p.set(0.8, detail="Ukládám cesty k souborům...")
+
+                # --- JEDNOTNÉ A ROBUSTNÍ ZPRACOVÁNÍ CEST ---
                 log_entries = []
-                for r in results:
-                    # Pokud zpráva obsahuje "Hotovo" (PDF) nebo "✅" (Excel), je to úspěch
-                    if "Hotovo" in r or "✅" in r:
-                        log_entries.append(r)  # Vložíme zprávu přímo bez prefixu [OK]
-                    else:
-                        # Jen skutečné chyby dostanou prefix [CHYBA]
-                        log_entries.append(f"[CHYBA] {r}")
-                
+                results_list = results if isinstance(results, list) else str(results).splitlines()
+
+                for r in results_list:
+                    log_entries.append(r)
+                    r_low = r.lower()
+
+                    # Hledáme indikátor úspěchu a složku výsledků (s diakritikou i bez)
+                    if "✅" in r and ("vysledky" in r_low or "výsledky" in r_low):
+                        try:
+                            # Rozdělíme řetězec v místě "v:" a vezmeme absolutní cestu
+                            if "v:" in r:
+                                path = os.path.abspath(r.split("v:")[1].strip())
+                                if os.path.exists(path):
+                                    if "wingate" in r_low:
+                                        last_wingate_path.set(path)
+                                    elif "spiro" in r_low:
+                                        last_spiro_path.set(path)
+                        except Exception as e:
+                            print(f"[ERROR] Selhalo parsování cesty: {e}")
+
                 gen_log.set("\n".join(log_entries))
-                p.set(1, message="Dokončeno")
-            
-            ui.notification_remove(gen_id)
-            ui.notification_show("Všechny soubory byly úspěšně vygenerovány.", type="default", duration=7)
+                ui.notification_remove(gen_id)
+                ui.notification_show("Generování dokončeno.", type="default", duration=7)
             
         except Exception as e:
             ui.notification_remove(gen_id)
             ui.notification_show(f"Chyba při generování: {e}", type="error")
+            old_log = gen_log.get()
+            gen_log.set(f"[KRITICKÁ CHYBA] {str(e)}\n\n" + old_log)
 
     @reactive.effect
     @reactive.event(input.go_single_report)
     def _single_report():
-        # 1. Získání vybraného ID
         ix = input.data_preview_selected_rows()
         if not ix: return
         df = comparison_data.get()
         athlete_id = df.iloc[ix[0]]["ID"]
         report_type = df.iloc[ix[0]]["Report"]
 
+        # Resetování tlačítek pro konkrétního sportovce
+        last_wingate_path.set(None)
+        last_spiro_path.set(None)
+
         ui.update_navset("main_nav", selected="📝 Výsledky")
         gen_id = ui.notification_show(f"Generuji report pro {athlete_id}...", duration=None, type="message")
 
         try:
             with ui.Progress(min=0, max=1) as p:
-                p.set(message=f"Zpracovávám {athlete_id}...", detail="Vytvářím report a Excel")
+                p.set(message=f"Zpracovávám {athlete_id}...")
                 
                 paths = detected_paths.get()
                 paths['main_folder'] = main_folder_path.get()
                 t_switch = input.toggle_switch() if "toggle_switch" in input else "False"
                 
-                # Volání nové funkce v master_engine
-                results = master_engine.run_individual_generation(
-                    athlete_id, report_type, paths, input.sport(), input.team(), t_switch
-                )
-                
+                # Volání engine pro jednotlivce
+                results = master_engine.run_individual_generation(athlete_id, report_type, paths, input.sport(), input.team(), t_switch)
+
+                # --- JEDNOTNÉ A ROBUSTNÍ ZPRACOVÁNÍ CEST ---
                 log_entries = []
-                for r in results:
-                    if "Hotovo" in r:
-                        # Pro zprávu o PDF reportu dáme [OK]
-                        log_entries.append(f"[OK] {r}")
-                    elif "✅" in r:
-                        # Pro Excel zprávu (obsahuje ✅) nedáme nic
-                        log_entries.append(r)
-                    else:
-                        # Vše ostatní označíme jako chybu
-                        log_entries.append(f"[CHYBA] {r}")
+                results_list = results if isinstance(results, list) else str(results).splitlines()
+
+                for r in results_list:
+                    log_entries.append(r)
+                    r_low = r.lower()
+
+                    if "✅" in r and ("vysledky" in r_low or "výsledky" in r_low):
+                        try:
+                            if "v:" in r:
+                                path = os.path.abspath(r.split("v:")[1].strip())
+                                if os.path.exists(path):
+                                    if "wingate" in r_low: 
+                                        last_wingate_path.set(path)
+                                    elif "spiro" in r_low: 
+                                        last_spiro_path.set(path)
+                        except Exception as e:
+                            print(f"[ERROR] Selhalo parsování cesty: {e}")
                 
-                old_log = gen_log.get()
-                new_entries = "\n".join(log_entries)
-                gen_log.set(new_entries + "\n\n" + old_log)
-                
+                current_log = gen_log.get()
+                gen_log.set("\n".join(log_entries) + "\n\n" + current_log)
                 p.set(1, message="Dokončeno")
 
-
-            # 1. Odstranění notifikace "Generuji..." po dokončení
             ui.notification_remove(gen_id)
             ui.notification_show(f"Hotovo pro {athlete_id}.", type="default", duration=5)
-
         except Exception as e:
-            # 2. Pokud se něco pokazí, musíme schovat notifikaci a ukázat chybu
             ui.notification_remove(gen_id)
-            ui.notification_show(f"Chyba při generování: {str(e)}", type="error")
-            
-            # Zápis chyby do konzole pro debugování
+            ui.notification_show(f"Chyba: {str(e)}", type="error")
             old_log = gen_log.get()
             gen_log.set(f"[CHYBA] {str(e)}\n\n" + old_log)
-    
+            
     @render.text
     def category_stats_output(): return processor.check_errors(comparison_data.get(), last_analysis_inputs.get())
 
@@ -656,7 +754,11 @@ def server(input, output, session):
                     try:
                         xl_f = list(Path(path).glob("*.xls*"))
                         if xl_f:
-                            tmp = pd.read_excel(xl_f[0], sheet_name="Data_Sheet")
+                            # Načtení do paměti pro okamžité uvolnění souboru
+                            import io
+                            with open(xl_f[0], "rb") as f:
+                                file_data = io.BytesIO(f.read())
+                            tmp = pd.read_excel(file_data, sheet_name="Data_Sheet")
                             u_ids = tmp['ID'].nunique()
                             sj_count = tmp['SJ'].notna().sum() if 'SJ' in tmp.columns else 0
                             count_str = f"({u_ids} unikátních ID, {sj_count}x SJ)" if sj_count > 0 else f"({u_ids} unikátních ID)"
@@ -673,37 +775,52 @@ def server(input, output, session):
             ))
         return ui.div(*rows, class_="folder-link-container")
 
+
     @render.ui
     def selection_actions_ui():
-            id_val = selected_id.get(); df = comparison_data.get()
-            if not id_val or df is None: return None
-            
-            row = df[df["ID"] == id_val]
-            report_status = row["Report"].values[0] 
-            hw = row["Wingate"].values[0] == "✅"; hs = row["Spirometrie"].values[0] == "✅"
-            is_failed = "FAILED" in report_status
-            
-            return ui.div(
+        id_val = selected_id.get(); df = comparison_data.get()
+        if not id_val or df is None: return None
+        
+        row = df[df["ID"] == id_val]
+        report_status = row["Report"].values[0] 
+        
+        # Detekce dostupnosti dat (✅ / ❌)
+        hw = row["Wingate"].values[0] == "✅"
+        hs = row["Spirometrie"].values[0] == "✅"
+        h1 = row["Srovnání 1"].values[0] == "✅"
+        h2 = row["Srovnání 2"].values[0] == "✅"
+        
+        is_failed = "FAILED" in report_status
+        
+        # VYVÁŽENÝ STYL: písmo akorát, odsazení mírně zmenšené pro úsporu místa
+        btn_style = "font-size: 0.82rem; padding: 3px 10px;"
+        
+        return ui.div(
+            ui.div(
+                ui.input_action_link("close_actions", "×", class_="close-btn"),
+                ui.div(ui.strong(f"👤 {id_val}:"), 
+                    ui.input_action_link("copy_id", "📋 Kopírovat ID", class_="action-link", style="margin-left:10px;")),
                 ui.div(
-                    ui.input_action_link("close_actions", "×", class_="close-btn"),
-                    ui.div(ui.strong(f"👤 {id_val}:"), 
-                        ui.input_action_link("copy_id", "📋 Kopírovat ID", class_="action-link", style="margin-left:10px;")),
-                    ui.div(
-                        ui.input_action_button("go_antro", "Otevřít Antropometrii", class_="btn-sm btn-outline-primary"),
-                        ui.input_action_button("go_win", "Zobrazit Wingate", class_="btn-sm btn-outline-primary") if hw else None,
-                        ui.input_action_button("go_spiro", "Zobrazit Spiro", class_="btn-sm btn-outline-primary") if hs else None,
-                        ui.input_action_button(
-                            "go_single_report", 
-                            "📄 Generovat report & Excel", 
-                            class_="btn-sm btn-success" if not is_failed else "btn-sm btn-secondary", 
-                            style="margin-left: auto;",
-                            disabled=is_failed
-                        ),
-                        style="display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; align-items: center;"
-                    ), class_="selection-card"
-                ),
-                class_="animate-appearance"
-            )
+                    # Plné názvy zachovány, styl aplikován individuálně
+                    ui.input_action_button("go_antro", "Antropometrie", class_="btn-sm btn-outline-primary", style=btn_style),
+                    ui.input_action_button("go_win", "Wingate", class_="btn-sm btn-outline-primary", style=btn_style) if hw else None,
+                    ui.input_action_button("go_srov1", "Srovnání 1", class_="btn-sm btn-outline-primary", style=btn_style) if h1 else None,
+                    ui.input_action_button("go_srov2", "Srovnání 2", class_="btn-sm btn-outline-primary", style=btn_style) if h2 else None,
+                    ui.input_action_button("go_spiro", "Spirometrie", class_="btn-sm btn-outline-primary", style=btn_style) if hs else None,
+                    
+                    ui.input_action_button(
+                        "go_single_report", 
+                        "📄 Generovat report & Excel", 
+                        class_="btn-sm btn-success" if not is_failed else "btn-sm btn-secondary", 
+                        style="margin-left: auto; font-size: 0.82rem; padding: 3px 12px;",
+                        disabled=is_failed
+                    ),
+                    # Flex-wrap: wrap povolen, aby se při extrémně dlouhém ID tlačítka bezpečně zalomila
+                    style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; align-items: center;"
+                ), class_="selection-card"
+            ),
+            class_="animate-appearance"
+        )
 
     @reactive.effect
     @reactive.event(input.copy_id)
@@ -783,17 +900,29 @@ def server(input, output, session):
 
 app = App(app_ui, server, static_assets=get_resource_path("."))
 
+
+
 def run_shiny(): uvicorn.run(app, host="127.0.0.1", port=8080, log_level="error")
 
-import multiprocessing
 
 if __name__ == "__main__":
+    import multiprocessing
+    import threading
     multiprocessing.freeze_support()
+    
+    # 1. Spustíme Shiny server v samostatném vlákně
+    # Tato funkce (pravděpodobně run_shiny) spouští Uvicorn na pozadí
     threading.Thread(target=run_shiny, daemon=True).start()
-    webview.create_window(
-            "Performance Analyzer UK FTVS", 
-            "http://127.0.0.1:8080", 
-            width=1280, 
-            height=920, 
-        )
+    
+    # 2. Vytvoříme okno přímo s cílovou URL adresou
+    # Místo parametru 'html' nyní používáme 'url'
+    window = webview.create_window(
+        "Performance Analyzer", 
+        url="http://127.0.0.1:8080", 
+        width=1280, 
+        height=920
+    )
+    
+    # 3. Spustíme samotné zobrazení okna s ikonou
+    # Funkce get_resource_path zajistí správné načtení ikony i v EXE režimu
     webview.start(icon=get_resource_path("logo.ico"))

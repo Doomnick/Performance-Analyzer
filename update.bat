@@ -8,51 +8,59 @@ set "ZIP_NAME=app_package.zip"
 set "EXE_NAME=Performance Analyzer.exe"
 set "HASH_FILE=file_hashes.txt"
 
-echo ===========================================
-echo    AKTUALIZACE SYSTEMU PERFORMANCE ANALYZER
-echo ===========================================
+echo ===================================================
+echo     AKTUALIZACE: %EXE_NAME%
+echo ===================================================
 
-:: 1. Počkáme, až se aplikace Performance Analyzer úplně ukončí
+:: 1. Pauza pro uvolnění souborů aplikací
+echo [1/5] Cekam na ukonceni aplikace...
 timeout /t 3 /nobreak > nul
 
-:: 2. Stáhneme nejnovější verzi ZIPu z GitHub Releases
-echo [1/4] Stahuji aktualizacni balicek...
-powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/%USER%/%REPO%/releases/latest/download/%ZIP_NAME%' -OutFile '%ZIP_NAME%'"
+:: 2. Rychlé stahování přes curl
+echo [2/5] Stahuji aktualizacni balicek...
+curl -L "https://github.com/%USER%/%REPO%/releases/latest/download/%ZIP_NAME%" -o "%ZIP_NAME%"
 
-if not exist "%ZIP_NAME%" (
-    echo [CHYBA] Nepodarilo se stahnout aktualizaci. Zkontrolujte pripojeni.
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo [CHYBA] Stahovani selhalo. Zkontrolujte internet.
     pause
     exit
 )
 
-:: 3. Čištění starých souborů (kromě dat a updateru)
-echo [2/4] Pripravuji slozku...
-:: Smažeme vše kromě reportů, výsledků, temp_plots a updaterů
-for /d %%i in (*) do (
-    if /i not "%%i"=="reporty" if /i not "%%i"=="vysledky" if /i not "%%i"=="temp_plots" rd /s /q "%%i"
-)
+:: 3. Čištění staré verze
+echo [3/5] Odstranuji starou verzi...
+if exist "_internal" rd /s /q "_internal"
+if exist "templates" rd /s /q "templates"
+
+:: Whitelist: Smažeme soubory, zachováme data a updater
 for %%i in (*) do (
-    if /i not "%%i"=="update.bat" if /i not "%%i"=="%ZIP_NAME%" if /i not "%%i"=="last_check_time.txt" del /q "%%i"
+    if /i not "%%i"=="update.bat" if /i not "%%i"=="%ZIP_NAME%" if /i not "%%i"=="reporty" if /i not "%%i"=="vysledky" if /i not "%%i"=="last_check_time.txt" if /i not "%%i"=="file_hashes.txt" del /q "%%i"
 )
 
-:: 4. Rozbalení nového ZIPu
-echo [3/4] Instaluji novou verzi...
-:: Windows 10/11 mají příkaz tar v základu
+:: 4. Rozbalení balíčku
+echo [4/5] Instaluji nove soubory...
 tar -xf "%ZIP_NAME%"
+if %ERRORLEVEL% neq 0 (
+    echo [CHYBA] Rozbaleni se nezdarilo.
+    pause
+    exit
+)
 
-:: 5. Úklid a aktualizace HASH_FILE
-echo [4/4] Dokoncuji instalaci...
+:: 5. Úklid a zápis SHA
+echo [5/5] Dokoncovani...
 del "%ZIP_NAME%"
 
-:: Získáme SHA z GitHubu znovu pro uložení do local_sha, aby aplikace věděla, že je aktuální
-for /f "delims=" %%S in ('powershell -Command "(Invoke-RestMethod -Uri 'https://api.github.com/repos/%USER%/%REPO%/contents/app.py').sha"') do set "REMOTE_SHA=%%S"
+:: Zápis nové verze SHA (Silent režim)
+for /f "delims=" %%S in ('powershell -Command "$ProgressPreference = 'SilentlyContinue'; (Invoke-RestMethod -Uri 'https://api.github.com/repos/%USER%/%REPO%/contents/app.py').sha"') do set "REMOTE_SHA=%%S"
 echo app.py: !REMOTE_SHA!> "%HASH_FILE%"
 
-echo ===========================================
-echo    AKTUALIZACE DOKONCENA!
-echo ===========================================
-timeout /t 2 > nul
+echo.
+echo Aktualizace uspesna! Spoustim aplikaci a zalamuji CMD...
+timeout /t 1 > nul
 
-:: Restartujeme přímo EXE
+:: Spuštění nové verze
 start "" "%EXE_NAME%"
-exit
+
+:: --- OKAMŽITÉ UKONČENÍ A SMAZÁNÍ UPDATERU ---
+:: Tento řádek smaže soubor update.bat z disku a okamžitě zavře okno CMD
+(goto) 2>nul & del "%~f0" & exit

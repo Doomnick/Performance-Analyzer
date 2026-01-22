@@ -1,11 +1,13 @@
-import pandas as pd
-import numpy as np
-from pathlib import Path
 import os
 os.environ["GIO_USE_VFS"] = "local"
 os.environ["G_MESSAGES_DEBUG"] = ""
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import io
 
 # --- POMOCNÉ FUNKCE ---
 
@@ -29,19 +31,28 @@ def build_comparison_df(paths, inputs):
     YES, NO = "✅", "❌"
     ant_path = paths.get("antropometrie")
     antropo_counts, antropo_ids_list = {}, []
+    
     if ant_path and os.path.exists(ant_path):
         excel_files = list(Path(ant_path).glob("*.xls*"))
         if excel_files:
             try:
-                xl = pd.ExcelFile(excel_files[0])
+                # 1. Načtení souboru do paměti a okamžité uzavření
+                with open(excel_files[0], "rb") as f:
+                    in_memory_data = io.BytesIO(f.read())
+                
+                # 2. Práce s daty v paměti (RAM), ne na disku
+                xl = pd.ExcelFile(in_memory_data)
                 sn = "Data_Sheet" if "Data_Sheet" in xl.sheet_names else xl.sheet_names[0]
                 df_ant = pd.read_excel(xl, sheet_name=sn)
+                
                 if 'ID' in df_ant.columns:
                     df_ant['ID'] = df_ant['ID'].astype(str).str.strip()
                     antropo_counts = df_ant['ID'].value_counts().to_dict()
                     antropo_ids_list = list(antropo_counts.keys())
-            except: pass
+            except Exception as e:
+                print(f"Chyba při bezpečném čtení antropometrie: {e}")
 
+    # Zbytek funkce zůstává stejný...
     all_ids = sorted(list(set(antropo_ids_list + get_file_stems(paths.get("wingate")) + 
                               get_file_stems(paths.get("srovnani")) + get_file_stems(paths.get("srovnani2")) + 
                               get_file_stems(paths.get("spiro"), "*.xls*"))))

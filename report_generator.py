@@ -52,7 +52,7 @@ def generate_pdf_report(data, output_folder):
     # 3. Příprava dat a výstupní cesty
     # Zajištění, že ID neobsahuje znaky zakázané v názvu souboru Windows
     safe_id = str(data['athlete']['ID']).replace("/", "_").replace("\\", "_")
-    report_name = f"{safe_id}_report.pdf"
+    report_name = f"{safe_id}.pdf"
     output_path = Path(output_folder) / report_name
     
     # 4. Renderování HTML šablony
