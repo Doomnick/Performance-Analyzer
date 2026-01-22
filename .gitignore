@@ -1,0 +1,21 @@
+# 1. Ignorovat úplně všechno
+/*
+
+# 2. POVOLIT konkrétní důležité soubory (Whitelist)
+!.gitignore
+!app.py
+!graphics_engine.py
+!master_engine.py
+!processor.py
+!report_generator.py
+!update.bat
+!requirements.txt
+
+# 3. POVOLIT grafické podklady (Klíčové pro EXE a UI)
+!image.png
+!logo.ico
+!logo.png
+
+# 4. POVOLIT složku se šablonami a vše v ní
+!templates/
+!templates/**

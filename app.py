@@ -1,0 +1,791 @@
+import os
+os.environ["GIO_USE_VFS"] = "local"
+os.environ["G_MESSAGES_DEBUG"] = ""
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+import pandas as pd
+import threading
+import webview 
+import uvicorn
+import subprocess
+import urllib.request
+import time
+import json
+from pathlib import Path
+from shiny import App, render, ui, reactive
+
+
+import processor      # Výpočty a kontrola dat
+import master_engine
+import sys
+
+def get_resource_path(relative_path):
+    """ Získá cestu k souborům pro skript i pro zabalené .exe """
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)  # Paralelní generování PD
+
+# Konfigurace pro kontrolu (odpovídá vašemu GitHubu)
+APP_VERSION = "1.0.0"
+GITHUB_USER = "Doomnick"
+GITHUB_REPO = "Performance-Analyzer"
+HASH_FILE = "file_hashes.txt"
+LAST_CHECK_FILE = "last_check_time.txt"
+
+
+
+# --- POMOCNÉ FUNKCE PRO WINDOWS ---
+def show_in_explorer(folder_path, id_name, module_type):
+    if not folder_path or not os.path.exists(folder_path): return
+    target_file = None
+    p = Path(folder_path)
+    pattern = f"*{id_name}*.xls*" if module_type == "spiro" else f"*{id_name}*.txt"
+    files = list(p.glob(pattern))
+    if files: target_file = files[0]
+    if target_file and target_file.exists():
+        subprocess.run(['explorer', '/select,', str(target_file)])
+
+def open_excel_directly(folder_path):
+    if not folder_path or not os.path.exists(folder_path): return
+    excel_files = list(Path(folder_path).glob("*.xls*"))
+    if excel_files: os.startfile(str(excel_files[0]))
+
+# --- UI ČÁST ---
+app_ui = ui.page_navbar(
+    ui.head_content(
+        ui.tags.script("""
+            Shiny.addCustomMessageHandler('copy_text', function(message) {
+                navigator.clipboard.writeText(message);
+            });
+        """),
+  ui.tags.style("""
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+            
+            body { background-color: #f8f9fa; font-family: 'Inter', sans-serif; }
+            
+            /* ÚPLNÉ ODSTRANĚNÍ DÍRY NAHOŘE (MEZI NAVBARem A OBSAHEM) */
+            .container-fluid { padding: 0 !important; max-width: 100% !important; }
+            .navbar > .container-fluid {
+                max-width: 100% !important; /* Změněno z 1400px pro ukotvení vlevo */
+                margin-left: 0 !important;   /* Změněno z 0 auto */
+                margin-right: 0 !important;
+                display: flex !important;
+                justify-content: flex-start !important;
+                padding-left: 15px !important;
+                padding-right: 20px !important;
+                padding-bottom: 0 !important;
+            }
+                
+            .navbar { 
+                background-color: #eef6ff !important; 
+                border-bottom: 1px solid #d0e3ff; 
+                margin-bottom: 0 !important; 
+                padding-bottom: 0 !important;
+                min-height: 60px;
+            }
+
+            /* 2. PŘEPÍNAČE JAKO KARTY (TABS) */
+            .navbar-nav {
+                align-items: flex-end !important; /* Zarovná karty k dolní lince */
+                height: 100%;
+                gap: 2px !important;
+            }
+
+            .nav-link { 
+                color: #666 !important; 
+                font-weight: 500 !important;
+                padding: 8px 20px !important;
+                margin-right: 0px !important;
+                border: 1px solid transparent !important;
+                border-radius: 8px 8px 0 0 !important; /* Zakulacení nahoře */
+                transition: all 0.2s ease !important;
+                background-color: rgba(255, 255, 255, 0.3) !important;
+            }
+
+            /* Vzhled aktivní karty */
+            .nav-link.active { 
+                color: #007bff !important; 
+                font-weight: 700 !important; 
+                background-color: #ffffff !important; /* Bílá karta */
+                border: 0px solid #d0e3ff !important;
+                border-bottom: 1px solid #ffffff !important; 
+                margin-bottom: -5px !important;              
+                position: relative;                           
+                z-index: 10;                                  
+            }
+
+            .nav-link:hover:not(.active) {
+                background-color: rgba(255, 255, 255, 0.8) !important;
+                color: #007bff !important;
+                margin-bottom: -5px !important;    
+            }
+            
+            /* Vynulování mezer u vnitřních panelů a karet */
+            .tab-content, .tab-pane { padding-top: 20 !important; margin-top: 0 !important; }
+            .card { margin-top: 0 !important; border-top-left-radius: 0; border-top-right-radius: 0; }
+            .bslib-sidebar-layout { 
+                height: calc(100vh - 60px) !important; 
+                margin: 0 !important;
+                border: none !important;
+            }
+            .bslib-sidebar-layout > .main { padding-top:  !important; }
+
+            /* SIDEBAR - KOMPAKTNÍ S VÝRAZNOU BARVOU */
+            .sidebar { 
+                background-color: #eef6ff !important; 
+                border-right: 1px solid #91a1ad !important; 
+                padding: 0px 0px !important; 
+                font-size: 0.88rem !important; 
+                padding-top: 0 !important;
+            }
+
+            /* SROVNÁNÍ NADPISŮ DO STEJNÉ VÝŠKY */
+            .sidebar-title { 
+                margin-top: 0 !important; 
+                margin-bottom: 0 !important; 
+                line-height: 2px !important; 
+                height: 2px;
+                display: flex;
+                align-items: center;
+            }
+            .sidebar-header-row { 
+                display: flex; justify-content: flex-start; align-items: center; 
+                gap: 0px; margin-bottom: 0px; margin-top: 0px; height: 0px;
+            }
+            .sidebar-title { font-weight: 700; color: #2c3e50; font-size: 0.9rem; }
+            
+            /* ČERNÉ NADPISY POLÍ */
+            .sidebar label { 
+                font-size: 0.78rem; font-weight: 700; color: #000000 !important; 
+                text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 1px !important;
+                margin-top: 4px;
+            }
+
+            .sidebar .form-control, .sidebar .form-select { 
+                font-size: 0.85rem !important; height: auto !important; padding: 3px 6px !important; 
+            }
+            
+            .sidebar hr { display: none !important; }
+            .sidebar .shiny-input-container { margin-bottom: 2px !important; }
+            .sidebar .btn { font-size: 0.85rem; padding: 2px 2px; }
+
+            .btn-row { display: flex; gap: 4px; margin-bottom: 5px; }
+
+            /* TABULKA - CENTROVÁNÍ */
+            .shiny-data-grid .rt-td, .shiny-data-grid .rt-th { 
+                display: flex !important; 
+                align-items: center !important; 
+                justify-content: center !important; 
+            }
+            .shiny-data-grid .rt-td:first-child, .shiny-data-grid .rt-th:first-child { 
+                justify-content: flex-start !important; 
+            }
+                    
+
+            @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+            .animate-appearance { animation: slideIn 0.6s ease-out; }
+
+            /* SLOŽKY A TLAČÍTKA */
+            .folder-row { 
+                display: flex; align-items: center; justify-content: space-between; 
+                padding: 4px 10px; margin-bottom: 2px; border-radius: 6px;
+                background: #ffffff; border: 1px solid #eee; font-size: 0.85rem;
+                transition: all 0.1s;
+            }
+            .folder-row:hover { background: #f0f7ff; border-color: #007bff; }
+            .folder-label { font-weight: 600; margin-right: 8px; display: inline-block; }
+            .record-count { font-size: 0.78rem; color: #6c757d; font-style: italic; }
+
+            .action-link { 
+                display: inline-flex !important; 
+                align-items: center !important; 
+                justify-content: center !important; 
+                height: 24px; 
+                padding: 0 8px !important;
+                font-size: 0.72rem; 
+                font-weight: 600; 
+                text-decoration: none; 
+                color: #007bff; 
+                border-radius: 4px; 
+                background: #eef6ff; 
+                margin-left: 2px;
+                line-height: 1 !important;
+            }
+            .remove-link { color: #dc3545 !important; background: #fff5f5; }
+                      
+            .header-tip {
+                font-size: 0.75rem;
+                font-weight: normal;
+                color: #6c757d;
+            }
+
+            /* CESTA K PROJEKTU - BOX */
+            .project-path-box {
+                background: #ffffff; border: 1px solid #d0e3ff; border-radius: 6px;
+                padding: 0px 12px; font-size: 0.8rem; color: #444;
+                margin-bottom: 8px; display: flex; align-items: center;
+                justify-content: space-between; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            }
+            .path-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; font-family: monospace; }
+
+            /* RADIO BUTTONY NEJSOU BOLD */
+            .sidebar .shiny-options-group label { 
+                font-weight: 400 !important; 
+                text-transform: none !important; 
+                letter-spacing: 0px !important;
+            }
+                      
+            /* ODSTRANĚNÍ DÍRY V KONZOLI */
+            .card-body { padding-top: 0 !important; }
+            .gen-console, .stats-log { 
+                background-color: #ffffff; 
+                color: #333; 
+                padding: 0px !important; 
+                border-radius: 1px; 
+                font-family: 'Consolas', monospace; 
+                font-size: 0.85rem; 
+                min-height: 250px;
+                border: 1px solid #ddd; 
+                border-left: 5px solid #28a745; 
+                white-space: pre-wrap;
+            }
+            .gen-console pre, .stats-log pre {
+                margin: 0 !important;
+                padding: 10px 12px !important;
+            }
+
+            .stats-log { border-left-color: #007bff; min-height: auto; }
+            .selection-card { border: 2px solid #007bff; background-color: #f0f7ff; margin-bottom: 8px; position: relative; padding: 10px; border-radius: 8px; }
+            .close-btn { position: absolute; top: 4px; right: 8px; cursor: pointer; font-size: 1.1rem; color: #666; text-decoration: none; }
+        """)
+    ),
+    ui.nav_panel(
+        "📂 Data a kontrola",
+        ui.layout_sidebar(
+            ui.sidebar(
+                ui.div(ui.h5("Konfigurace", class_="sidebar-title"), class_="sidebar-header-row"),
+                
+                ui.div(
+                    ui.input_action_button("select_folder", "Vybrat složku projektu", class_="btn-primary", style="flex-grow: 1;"),
+                    ui.input_action_button("help_btn", "?", class_="btn-outline-info", style="width: 35px; font-weight: bold;"),
+                    class_="btn-row"
+                ),
+                
+                ui.output_ui("dynamic_spiro_ui"),
+                ui.input_select("sport", "Disciplína:", choices=["Hokej: dospělí", "Hokej: junioři", "Hokej: dorost", "Gymnastika"]),
+                ui.input_text("team", "Název týmu:", ""),
+                
+                ui.output_ui("action_buttons_ui"),
+                
+                width=292,
+            ),
+            ui.h6("Stav datových zdrojů:", style="font-weight:700; color:#555; margin-bottom:0px; margin-top:8px; padding-bottom:0px;"),
+            ui.output_ui("project_path_ui"),
+            ui.output_ui("interactive_folder_status"),
+            
+            ui.output_ui("selection_actions_ui"),
+            ui.output_ui("table_container_ui")
+        )
+    ),
+    ui.nav_panel(
+        "📝 Výsledky",
+        ui.card(ui.card_header("Souhrnná statistika"), ui.div(ui.output_text_verbatim("category_stats_output"), class_="stats-log")),
+        ui.card(ui.card_header("Průběh generování"), ui.div(ui.output_text_verbatim("generation_console_output"), class_="gen-console"))
+    ),
+
+    ui.nav_spacer(),  # Vyplní veškeré volné místo uprostřed
+    ui.nav_control(
+        ui.span(
+            f"v{APP_VERSION}", 
+            style="color: #6c757d; font-size: 0.8rem; padding-top: 18px; display: inline-block; margin-right: 15px;"
+        )
+    ),
+
+    title=ui.div(
+        ui.tags.img(src="image.png", height="35px", style="margin-right: 12px;"),
+        "Performance Analyzer",
+        style="display: flex; align-items: center;"
+    ),
+    id="main_nav",
+)
+
+def server(input, output, session):
+    main_folder_path = reactive.Value(""); detected_paths = reactive.Value({}); comparison_data = reactive.Value(None) 
+    last_analysis_inputs = reactive.Value({}); selected_id = reactive.Value(None); gen_log = reactive.Value("Systém připraven...")
+    
+    @reactive.effect
+    def check_updates_at_startup():
+        print("\n" + "="*45)
+        print("[INFO] Zahajuji kontrolu aktualizaci...")
+        
+        # 1. Kontrola časového odstupu (1 hodina = 3600 sekund)
+        current_time = time.time()
+        if os.path.exists(LAST_CHECK_FILE):
+            try:
+                with open(LAST_CHECK_FILE, "r") as f:
+                    last_check = float(f.read().strip())
+                
+                if (current_time - last_check) < 180:
+                    remaining = int((180 - (current_time - last_check)) / 60)
+                    print(f"[SKIP] Kontrola provedena nedavno. Dalsi za: {remaining} min.")
+                    print("="*45 + "\n")
+                    return 
+            except:
+                pass 
+
+        try:
+            # 2. Dotaz na GitHub
+            url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/app.py"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read().decode())
+                remote_sha = data['sha']
+                
+                with open(LAST_CHECK_FILE, "w") as f:
+                    f.write(str(current_time))
+
+            # 3. Načtení lokálního SHA
+            local_sha = ""
+            if os.path.exists(HASH_FILE):
+                with open(HASH_FILE, "r") as f:
+                    for line in f:
+                        if "app.py:" in line:
+                            local_sha = line.split(":")[1].strip()
+
+            print(f"[REMOTE] SHA: {remote_sha}")
+            print(f"[LOCAL]  SHA: {local_sha}")
+
+            if remote_sha != local_sha:
+                print("[UPDATE] Nova verze nalezena!")
+                
+                # OPRAVA: Definice objektu 'm' před jeho zobrazením
+                m = ui.modal(
+                    ui.tags.div(
+                        ui.h4("🚀 K dispozici je nová verze!"),
+                        ui.p("Chcete nyní stáhnout aktualizaci? Aplikace se vypne a spustí aktualizační proces."),
+                        style="padding: 10px;"
+                    ),
+                    title="Aktualizace systému",
+                    footer=ui.tags.div(
+                        ui.input_action_button("confirm_update", "Aktualizovat nyní", class_="btn-primary"),
+                        ui.modal_button("Zrušit"),
+                    ),
+                    easy_close=False
+                )
+                ui.modal_show(m)
+            else:
+                print("[OK] Aplikace je aktualni.")
+
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                print("[LIMIT] GitHub API limit dosazen. Zkuste to za hodinu.")
+            else:
+                print(f"[CHYBA] HTTP {e.code}")
+        except Exception as e:
+            print(f"[CHYBA] Kontrola selhala: {e}")
+        
+        print("="*45 + "\n")
+
+    # Reakce na kliknutí na "Aktualizovat nyní"
+    @reactive.effect
+    @reactive.event(input.confirm_update)
+    def run_update_process():
+        ui.modal_remove()
+        print("[SYSTEM] Spoustim update.bat a ukoncuji aplikaci...")
+        try:
+            # Spustí update.bat v novém okně
+            subprocess.Popen(["cmd", "/c", "start", "update.bat"], shell=True)
+            # Okamžité ukončení Pythonu, aby se uvolnil soubor app.py pro přepsání
+            os._exit(0)
+        except Exception as e:
+            print(f"[CHYBA] Nepodarilo se spustit update.bat: {e}")
+
+    def trigger_analysis():
+        paths = detected_paths.get()
+        if not paths: return
+        cur_in = {"wingate": paths["wingate"] is not None, "spirometrie": paths["spiro"] is not None, "srovnani": paths["srovnani"] is not None, "srovnani2": paths["srovnani2"] is not None}
+        last_analysis_inputs.set(cur_in)
+        try:
+            df = processor.build_comparison_df(paths, cur_in)
+            comparison_data.set(df)
+        except Exception as e: ui.notification_show(f"Chyba: {e}", type="error")
+
+    def perform_full_scan():
+        base_path = main_folder_path.get()
+        if not base_path or not os.path.exists(base_path): return
+        try:
+            all_dirs = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))]
+            som_p = next((os.path.join(base_path, d) for d in all_dirs if d.lower().startswith("somato")), None)
+            win_p = next((os.path.join(base_path, d) for d in all_dirs if d.lower().startswith("wingate")), None)
+            spi_p = next((os.path.join(base_path, d) for d in all_dirs if d.lower().startswith("spiro")), None)
+            sr_p, sr2_p = None, None
+            if win_p:
+                subs = [d for d in os.listdir(win_p) if os.path.isdir(os.path.join(win_p, d))]
+                if "srovnani" in subs: sr_p = os.path.join(win_p, "srovnani")
+                if "srovnani2" in subs: sr2_p = os.path.join(win_p, "srovnani2")
+            detected_paths.set({"antropometrie": som_p, "wingate": win_p, "spiro": spi_p, "srovnani": sr_p, "srovnani2": sr2_p})
+            trigger_analysis()
+        except: pass
+
+    @render.ui
+    def action_buttons_ui():
+        if not main_folder_path.get(): return None
+        return ui.div(
+            ui.input_action_button("check", "Obnovit data", class_="btn-outline-primary w-100", style="margin-bottom: 2px;"),
+            ui.input_action_button("generate_pdf", "Generovat PDF reporty", class_="btn-success w-100", style="font-weight:600"),
+            style="margin-top: 3px;"
+        )
+
+    @render.ui
+    def project_path_ui():
+        path = main_folder_path.get()
+        if not path: return None
+        return ui.div(
+            ui.div(
+                ui.span("📁 ", style="font-size: 0.9rem; display: flex; align-items: center;"), 
+                ui.span(path, class_="path-text"), 
+                style="display: flex; align-items: center; gap: 5px; width: 55%;"
+            ),
+            ui.div(
+                ui.input_action_link("open_main_dir", "Otevřít", class_="action-link"),
+                ui.input_action_link("copy_path", "Kopírovat", class_="action-link"),
+                ui.input_action_link("reset_app", "×", class_="action-link remove-link", style="font-size: 1rem; height: 24px; padding: 0 8px; display: flex; align-items: center;"),
+                style="display: flex; gap: 3px; align-items: center;"
+            ), class_="project-path-box", style="align-items: center;"
+        )
+
+    @reactive.effect
+    @reactive.event(input.open_main_dir)
+    def _open_folder():
+        path = main_folder_path.get()
+        if path and os.path.exists(path):
+            os.startfile(path)
+
+    @reactive.effect
+    @reactive.event(input.copy_path)
+    async def _copy():
+        await session.send_custom_message('copy_text', main_folder_path.get())
+        ui.notification_show("Cesta zkopírována do schránky", duration=2)
+
+    @reactive.effect
+    @reactive.event(input.reset_app)
+    def _reset():
+        main_folder_path.set(""); detected_paths.set({}); comparison_data.set(None)
+
+    @reactive.effect
+    @reactive.event(input.help_btn)
+    def _help():
+        m = ui.modal(
+            ui.h6("Pravidla automatické detekce:"),
+            ui.p("Pro úspěšnou detekci stačí, aby názvy podsložek v hlavní složce začínaly těmito slovy:"),
+            ui.tags.ul(
+                ui.tags.li(ui.tags.b("Somato..."), " : Pro antropometrii. Musí obsahovat Excel s listem 'Data_Sheet'."),
+                ui.tags.li(ui.tags.b("Wingate..."), " : Pro wingate testy. Obsahuje .txt soubory pojmenované dle ID."),
+                ui.tags.li(ui.tags.b("Spiro..."), " : Pro spirometrii. Obsahuje .xlsx soubory pojmenované dle ID."),
+                ui.tags.li(ui.tags.b("srovnani / srovnani2"), " : Volitelné podsložky (musí se jmenovat přesně takto) umístěné uvnitř složky Wingate.")
+            ),
+            ui.hr(),
+            title="Nápověda", size="l", easy_close=True, footer=ui.modal_button("Zavřít")
+        )
+        ui.modal_show(m)
+    @render.ui
+    def dynamic_spiro_ui():
+        paths = detected_paths.get(); spiro_dir = paths.get("spiro")
+        if not spiro_dir or not os.path.exists(spiro_dir): return None
+        initial_val = "False"
+        files = list(Path(spiro_dir).glob("*.xls*"))
+        if files:
+            try:
+                df_check = pd.read_excel(files[0], header=None, nrows=150)
+                if any(df_check.iloc[:, 0].astype(str).str.strip().str.lower() == "v"): initial_val = "True"
+            except: pass
+        return ui.div(ui.input_radio_buttons("toggle_switch", "Metrika Spirometrie:", {"False": "Výkon (W)", "True": "Rychlost (km/h)"}, selected=initial_val, inline=True), style="margin-bottom: 2px;")
+
+    @render.ui
+    def table_container_ui():
+        df = comparison_data.get()
+        if df is None or df.empty: 
+            return None
+        
+        return ui.div(
+            ui.card(
+                ui.card_header(
+                    ui.div(
+                        ui.span("🔍 Srovnávací tabulka ID"), 
+                        ui.span("💡 Klikněte na řádek pro akce", class_="header-tip"),
+                        style="display: flex; justify-content: space-between; align-items: center; width: 100%;"
+                    )
+                ),
+                ui.output_data_frame("data_preview"),
+            ),
+            class_="animate-appearance"
+        )
+
+    @reactive.effect
+    @reactive.event(main_folder_path)
+    def _auto_scan(): perform_full_scan()
+
+    @reactive.effect
+    @reactive.event(input.check)
+    def _manual_refresh(): trigger_analysis()
+
+    @reactive.effect
+    @reactive.event(input.generate_pdf)
+    def _generate():
+        df = comparison_data.get()
+        if df is None or df.empty: return
+        
+        ui.update_navset("main_nav", selected="📝 Výsledky")
+        
+        # Trvalá notifikace v rohu po dobu generování
+        gen_id = ui.notification_show("Spouštím hromadné generování...", duration=None, type="message")
+        
+        try:
+            with ui.Progress(min=0, max=1) as p:
+                p.set(message="Generuji reporty a tabulky...", detail="Zpracovávám grafy (může to trvat několik vteřin)")
+                
+                paths = detected_paths.get()
+                paths['main_folder'] = main_folder_path.get()
+                t_switch = input.toggle_switch() if "toggle_switch" in input else "False"
+                
+                # Zpracujeme všechny, kteří nejsou FAILED
+                results = master_engine.run_multisession_generation(df, paths, input.sport(), input.team(), t_switch)
+                
+                log_entries = []
+                for r in results:
+                    # Pokud zpráva obsahuje "Hotovo" (PDF) nebo "✅" (Excel), je to úspěch
+                    if "Hotovo" in r or "✅" in r:
+                        log_entries.append(r)  # Vložíme zprávu přímo bez prefixu [OK]
+                    else:
+                        # Jen skutečné chyby dostanou prefix [CHYBA]
+                        log_entries.append(f"[CHYBA] {r}")
+                
+                gen_log.set("\n".join(log_entries))
+                p.set(1, message="Dokončeno")
+            
+            ui.notification_remove(gen_id)
+            ui.notification_show("Všechny soubory byly úspěšně vygenerovány.", type="default", duration=7)
+            
+        except Exception as e:
+            ui.notification_remove(gen_id)
+            ui.notification_show(f"Chyba při generování: {e}", type="error")
+
+    @reactive.effect
+    @reactive.event(input.go_single_report)
+    def _single_report():
+        # 1. Získání vybraného ID
+        ix = input.data_preview_selected_rows()
+        if not ix: return
+        df = comparison_data.get()
+        athlete_id = df.iloc[ix[0]]["ID"]
+        report_type = df.iloc[ix[0]]["Report"]
+
+        ui.update_navset("main_nav", selected="📝 Výsledky")
+        gen_id = ui.notification_show(f"Generuji report pro {athlete_id}...", duration=None, type="message")
+
+        try:
+            with ui.Progress(min=0, max=1) as p:
+                p.set(message=f"Zpracovávám {athlete_id}...", detail="Vytvářím report a Excel")
+                
+                paths = detected_paths.get()
+                paths['main_folder'] = main_folder_path.get()
+                t_switch = input.toggle_switch() if "toggle_switch" in input else "False"
+                
+                # Volání nové funkce v master_engine
+                results = master_engine.run_individual_generation(
+                    athlete_id, report_type, paths, input.sport(), input.team(), t_switch
+                )
+                
+                log_entries = []
+                for r in results:
+                    if "Hotovo" in r:
+                        # Pro zprávu o PDF reportu dáme [OK]
+                        log_entries.append(f"[OK] {r}")
+                    elif "✅" in r:
+                        # Pro Excel zprávu (obsahuje ✅) nedáme nic
+                        log_entries.append(r)
+                    else:
+                        # Vše ostatní označíme jako chybu
+                        log_entries.append(f"[CHYBA] {r}")
+                
+                old_log = gen_log.get()
+                new_entries = "\n".join(log_entries)
+                gen_log.set(new_entries + "\n\n" + old_log)
+                
+                p.set(1, message="Dokončeno")
+
+
+            # 1. Odstranění notifikace "Generuji..." po dokončení
+            ui.notification_remove(gen_id)
+            ui.notification_show(f"Hotovo pro {athlete_id}.", type="default", duration=5)
+
+        except Exception as e:
+            # 2. Pokud se něco pokazí, musíme schovat notifikaci a ukázat chybu
+            ui.notification_remove(gen_id)
+            ui.notification_show(f"Chyba při generování: {str(e)}", type="error")
+            
+            # Zápis chyby do konzole pro debugování
+            old_log = gen_log.get()
+            gen_log.set(f"[CHYBA] {str(e)}\n\n" + old_log)
+    
+    @render.text
+    def category_stats_output(): return processor.check_errors(comparison_data.get(), last_analysis_inputs.get())
+
+    @render.text
+    def generation_console_output(): return gen_log.get()
+
+    @render.ui
+    def interactive_folder_status():
+        paths = detected_paths.get()
+        if not paths: return ui.p("Složka nebyla vybrána.", style="font-style:italic; color:#999; padding-left:5px; margin-top: -25px; padding-top: 0px;")
+        labels = {"antropometrie": ("Antropometrie", "*.xls*"), "wingate": ("Wingate", "*.txt"), "spiro": ("Spirometrie", "*.xls*"), "srovnani": ("Srovnání 1", "*.txt"), "srovnani2": ("Srovnání 2", "*.txt")}
+        rows = []
+        for key, (label, pattern) in labels.items():
+            path = paths.get(key); exists = path is not None and os.path.exists(path); count_str = ""
+            if exists:
+                if key == "antropometrie":
+                    try:
+                        xl_f = list(Path(path).glob("*.xls*"))
+                        if xl_f:
+                            tmp = pd.read_excel(xl_f[0], sheet_name="Data_Sheet")
+                            u_ids = tmp['ID'].nunique()
+                            sj_count = tmp['SJ'].notna().sum() if 'SJ' in tmp.columns else 0
+                            count_str = f"({u_ids} unikátních ID, {sj_count}x SJ)" if sj_count > 0 else f"({u_ids} unikátních ID)"
+                    except: count_str = "(Chyba)"
+                else: count_str = f"({len(processor.get_file_stems(path, pattern))} záznamů)"
+            rows.append(ui.div(
+                ui.div(ui.span(f"{'✅' if exists else '❌'} {label}", class_="folder-label"), ui.span(count_str, class_="record-count")),
+                ui.div(
+                    ui.input_action_link(f"open_{key}", "Otevřít", class_="action-link") if exists else None, 
+                    ui.input_action_link(f"change_{key}", "Změnit", class_="action-link"), 
+                    ui.input_action_link(f"remove_{key}", "×", class_="action-link remove-link") if exists else None
+                ), 
+                class_="folder-row"
+            ))
+        return ui.div(*rows, class_="folder-link-container")
+
+    @render.ui
+    def selection_actions_ui():
+            id_val = selected_id.get(); df = comparison_data.get()
+            if not id_val or df is None: return None
+            
+            row = df[df["ID"] == id_val]
+            report_status = row["Report"].values[0] 
+            hw = row["Wingate"].values[0] == "✅"; hs = row["Spirometrie"].values[0] == "✅"
+            is_failed = "FAILED" in report_status
+            
+            return ui.div(
+                ui.div(
+                    ui.input_action_link("close_actions", "×", class_="close-btn"),
+                    ui.div(ui.strong(f"👤 {id_val}:"), 
+                        ui.input_action_link("copy_id", "📋 Kopírovat ID", class_="action-link", style="margin-left:10px;")),
+                    ui.div(
+                        ui.input_action_button("go_antro", "Otevřít Antropometrii", class_="btn-sm btn-outline-primary"),
+                        ui.input_action_button("go_win", "Zobrazit Wingate", class_="btn-sm btn-outline-primary") if hw else None,
+                        ui.input_action_button("go_spiro", "Zobrazit Spiro", class_="btn-sm btn-outline-primary") if hs else None,
+                        ui.input_action_button(
+                            "go_single_report", 
+                            "📄 Generovat report & Excel", 
+                            class_="btn-sm btn-success" if not is_failed else "btn-sm btn-secondary", 
+                            style="margin-left: auto;",
+                            disabled=is_failed
+                        ),
+                        style="display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; align-items: center;"
+                    ), class_="selection-card"
+                ),
+                class_="animate-appearance"
+            )
+
+    @reactive.effect
+    @reactive.event(input.copy_id)
+    async def _copy_id():
+        await session.send_custom_message('copy_text', str(selected_id.get()))
+        ui.notification_show(f"ID {selected_id.get()} zkopírováno", duration=2)
+
+    @reactive.effect
+    @reactive.event(input.close_actions)
+    def _close_panel(): selected_id.set(None)
+
+    @reactive.effect    
+    @reactive.event(input.go_antro)
+    def _go_a(): open_excel_directly(detected_paths.get().get("antropometrie"))
+    @reactive.effect
+    @reactive.event(input.go_win)
+    def _go_w(): show_in_explorer(detected_paths.get().get("wingate"), selected_id.get(), "wingate")
+    @reactive.effect
+    @reactive.event(input.go_spiro)
+    def _go_s(): show_in_explorer(detected_paths.get().get("spiro"), selected_id.get(), "spiro")
+    @reactive.effect
+    @reactive.event(input.go_srov1)
+    def _go_s1(): show_in_explorer(detected_paths.get().get("srovnani"), selected_id.get(), "wingate")
+    @reactive.effect
+    @reactive.event(input.go_srov2)
+    def _go_s2(): show_in_explorer(detected_paths.get().get("srovnani2"), selected_id.get(), "wingate")
+
+    @reactive.effect
+    @reactive.event(input.select_folder)
+    def _sel():
+        active_window = webview.active_window()
+        if active_window:
+            # Změna z webview.FOLDER_DIALOG na webview.FileDialog.FOLDER
+            res = active_window.create_file_dialog(webview.FileDialog.FOLDER)
+            if res and len(res) > 0:
+                main_folder_path.set(res[0])
+
+    @render.data_frame
+    def data_preview():
+        df = comparison_data.get()
+        if df is None: return render.DataGrid(pd.DataFrame(columns=["ID", "Wingate", "Spirometrie", "Report"]))
+        return render.DataGrid(df, width="100%", selection_mode="row")
+
+    def setup_folder_actions(key):
+        @reactive.effect
+        @reactive.event(input[f"open_{key}"])
+        def _open():
+            p = detected_paths.get().get(key)
+            if key == "antropometrie": open_excel_directly(p)
+            else: os.startfile(p)
+
+        @reactive.effect
+        @reactive.event(input[f"change_{key}"])
+        def _change():
+            # Nahrazení TK dialogu za pywebview dialog
+            if webview.windows:
+                res = webview.windows[0].create_file_dialog(webview.FileDialog.FOLDER)
+                if res and len(res) > 0:
+                    nd = res[0]
+                    curr = detected_paths.get().copy(); curr[key] = nd
+                    detected_paths.set(curr); trigger_analysis()
+
+        @reactive.effect
+        @reactive.event(input[f"remove_{key}"])
+        def _remove():
+            curr = detected_paths.get().copy(); curr[key] = None
+            detected_paths.set(curr); trigger_analysis()
+
+    for k in ["antropometrie", "wingate", "spiro", "srovnani", "srovnani2"]: setup_folder_actions(k)
+
+    @reactive.effect
+    def _handle_selection():
+        ix = input.data_preview_selected_rows()
+        df = comparison_data.get()
+        if df is not None and ix: selected_id.set(df.iloc[ix[0]]["ID"])
+        else: selected_id.set(None)
+
+app = App(app_ui, server, static_assets=get_resource_path("."))
+
+def run_shiny(): uvicorn.run(app, host="127.0.0.1", port=8080, log_level="error")
+
+import multiprocessing
+
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
+    threading.Thread(target=run_shiny, daemon=True).start()
+    webview.create_window(
+            "Performance Analyzer UK FTVS", 
+            "http://127.0.0.1:8080", 
+            width=1280, 
+            height=920, 
+        )
+    webview.start(icon=get_resource_path("logo.ico"))

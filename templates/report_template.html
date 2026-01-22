@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        /* Konfigurace A4 landscape */
+        @page { 
+            size: A4 landscape; 
+            margin: 0.5cm; 
+        }
+        
+        html, body { 
+            margin: 0; 
+            padding: 0; 
+            height: 100%; 
+        }
+
+        body { 
+            font-family: 'Segoe UI', Arial, sans-serif; 
+            color: #333; 
+            font-size: 12px; 
+        }
+
+        /* --- STRÁNKOVÁNÍ --- */
+        .page-container {
+            height: 20cm; /* Fixní výška zajišťuje, že se patička nepohne */
+            display: flex;
+            flex-direction: column;
+            page-break-after: always;
+            overflow: hidden;
+            box-sizing: border-box;
+        }
+        .page-container:last-of-type { page-break-after: auto; }
+
+        /* --- HEADER --- */
+        .header { 
+            text-align: center; 
+            border-bottom: 1px solid #eee;
+            padding-bottom: 3px; 
+            margin-bottom: 5px; 
+            flex: 0 0 auto; 
+        }
+        .athlete-name { font-size: 18px; font-weight: bold; }
+
+        /* --- TABULKY (HORNÍ / SPIRO) --- */
+        .top-container { flex: 0 0 auto; }
+        .clean-table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            table-layout: fixed; 
+            border: none; 
+        }
+        
+        .clean-table th { 
+            background-color: #ffffff; 
+            font-weight: bold; 
+            font-size: 12px; 
+            padding: 3px 4px; 
+            border: none;
+            border-bottom: 1.5px solid #333; 
+            text-align: center;
+        }
+        
+        .clean-table th:nth-child(1), .clean-table th:nth-child(2) { text-align: left; }
+
+        .clean-table td { 
+            font-size: 12px; 
+            padding: 4px 2px; 
+            text-align: center; 
+            border: none; 
+            overflow: hidden; 
+            white-space: nowrap; 
+        }
+
+        .label-left { text-align: left !important; font-weight: bold; padding-left: 5px; white-space: normal; }
+        .v-sep { border-left: 1.5px solid #333 !important; }
+
+        /* --- GRAFY A STRUKTURA --- */
+        .bottom-container { 
+            flex: 1; 
+            display: flex; 
+            flex-direction: column; 
+            min-height: 0; 
+        }
+        
+        .spiro-row {
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: stretch;
+            flex: 1; 
+            min-height: 0;
+            margin-top: 5px;
+        }
+
+        .charts-section { 
+            flex: 1; 
+            display: flex; 
+            justify-content: flex-start; 
+            align-items: center; 
+            min-height: 0; 
+        }
+
+        .chart-box { 
+            width: 100%; 
+            height: 100%; 
+            display: flex; 
+            align-items: center; 
+        }
+
+        .chart-box img { 
+            max-width: 100%; 
+            max-height: 100%; 
+            object-fit: contain; 
+        }
+
+        /* --- HISTORIE (ZAROVNÁNÍ NA STŘED) --- */
+        .history-section { flex: 0 0 auto; }
+        .history-section h4 { 
+            margin: 5px 0 2px 0; 
+            color: #333; 
+            border-bottom: 1px solid #eee; 
+            font-size: 12px; 
+            text-align: left; 
+        }
+        
+        .history-table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            table-layout: fixed; 
+            border: none;
+        }
+
+        .history-table thead { display: table-header-group; } /* Fix pro stabilitu hlavičky */
+
+        .history-table th, .history-table td { 
+            padding: 4px 2px; 
+            text-align: center; 
+            font-size: 11px; 
+            white-space: nowrap;
+        }
+
+        .history-table th:first-child, 
+        .history-table td:first-child { 
+            text-align: left !important; 
+            padding-left: 5px; 
+        }
+
+        .history-table th { 
+            font-weight: bold; 
+            border-bottom: 1.5px solid #333; 
+            background-color: #ffffff;
+        }
+
+        /* Šířky sloupců historie */
+        .col-datum   { width: 75px; }
+        .col-th      { width: 45px; }
+        .col-tuk     { width: 45px; }
+        .col-ath     { width: 50px; }
+        .col-pmax    { width: 65px; }
+        .col-pmax-kg { width: 85px; }
+        .col-pmin    { width: 55px; }
+        .col-p5s     { width: 60px; }
+        .col-iu      { width: 45px; }
+        .col-prace   { width: 70px; }
+        .col-prace-th { width: 110px; }
+        .col-tf      { width: 35px; }
+        .col-la      { width: 35px; }
+        
+        /* --- FOOTER --- */
+        .footer { 
+            flex: 0 0 auto; 
+            margin-top: auto; 
+            font-size: 9px; 
+            color: #777; 
+            border-top: 1px solid #eee; 
+            padding-top: 5px; 
+            display: flex; 
+            align-items: center; 
+            white-space: nowrap; 
+            break-inside: avoid;
+        }
+        .footer img { height: 25px; margin-right: 10px; }
+    </style>
+</head>
+<body>
+
+    {% if wingate %}
+    <div class="page-container">
+        <div class="header">
+            <div class="athlete-name">{{ athlete['Name'] }}</div>
+            <div style="font-size: 9px;">Datum měření: {{ athlete['Date_measurement'] }} | Sport: {{ sport }}</div>
+        </div>
+
+        <div class="top-container">
+            <table class="clean-table">
+                <thead>
+                    <tr>
+                        <th colspan="2" style="width: 22%;">Antropometrie</th>
+                        <th class="v-sep" style="width: 22%; padding-left: 10px;">Wingate test</th>
+                        <th>Absolutní</th><th>Relativní (TH)</th><th>Relativní (ATH)</th><th>Pětivteřinový průměr</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td class="label-left">Datum narození</td><td>{{ athlete['Birth'] }}</td>
+                        <td class="label-left v-sep" style="padding-left: 10px;">Maximální výkon</td>
+                        <td>{{ wingate['PP']|int }} W</td><td>{{ wingate['PP_th'] }} W/kg</td><td>{{ wingate['PP_ath'] }} W/kg</td><td>{{ wingate['PP5s'] }} W</td>
+                    </tr>
+                    <tr>
+                        <td class="label-left">Věk</td><td>{{ athlete['Age'] }}</td>
+                        <td class="label-left v-sep" style="padding-left: 10px;">Minimální výkon</td>
+                        <td>{{ wingate['Pmin']|int }} W</td><td>{{ wingate['Pmin_th'] }} W/kg</td><td>{{ wingate['Pmin_ath'] }} W/kg</td><td>{{ wingate['Pmin5s'] }} W</td>
+                    </tr>
+                    <tr>
+                        <td class="label-left">Výška</td><td>{{ athlete['Height']|int }} cm</td>
+                        <td class="label-left v-sep" style="padding-left: 10px;">Pokles výkonu</td>
+                        <td>{{ wingate['Drop']|int }} W</td><td>{{ wingate['Drop_th'] }} W/kg</td><td>{{ wingate['Drop_ath'] }} W/kg</td><td></td>
+                    </tr>
+                    <tr>
+                        <td class="label-left">TH - Hmotnost</td><td>{{ athlete['Weight']|round(1) }} kg</td>
+                        <td class="label-left v-sep" style="padding-left: 10px;">Celková práce</td>
+                        <td>{{ wingate['TotalWork_kJ'] }} kJ</td><td>{{ wingate['Work_th'] }} J/kg</td><td>{{ wingate['Work_ath'] }} J/kg</td><td></td>
+                    </tr>
+                    <tr>
+                        <td class="label-left">Tuk</td><td>{{ athlete['Fat'] }} %</td>
+                        <td class="label-left v-sep" style="padding-left: 10px;">Index Únavy</td>
+                        <td>{{ wingate['IU'] }} %</td><td></td><td></td><td></td>
+                    </tr>
+                    <tr>
+                        <td class="label-left">ATH - Aktivní hmota</td><td>{{ athlete['ATH'] }} kg</td>
+                        <td class="label-left v-sep" style="padding-left: 10px;">Celkový počet otáček</td>
+                        <td>{{ wingate['Turns']|int }}</td><td></td><td></td><td></td>
+                    </tr>
+                    <tr>
+                        <td colspan="2"></td>
+                        <td class="label-left v-sep" style="padding-left: 10px;">Laktát (max)</td>
+                        <td>{% if athlete['LA']|string != 'nan' and athlete['LA'] != 0 %}{{ athlete['LA'] }} mmol/l{% endif %}</td>
+                        <td></td><td></td><td></td>
+                    </tr>
+                    <tr>
+                        <td colspan="2"></td>
+                        <td class="label-left v-sep" style="padding-left: 10px;">Max. Tepová frekvence</td>
+                        <td>{% if wingate['HRmax']|string != 'nan' and wingate['HRmax'] > 0 %}{{ wingate['HRmax'] }} BPM{% endif %}</td>
+                        <td></td><td></td><td></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="bottom-container">
+            <div class="charts-section"><div class="chart-box"><img src="{{ plots['wingate'] }}"></div></div>
+            <div class="history-section">
+                <h4>Historie měření</h4>
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th class="col-datum">Datum</th>
+                            <th class="col-th">TH (kg)</th>
+                            <th class="col-tuk">Tuk (%)</th>
+                            <th class="col-ath">ATH (kg)</th>
+                            <th class="col-pmax">Pmax (W)</th>
+                            <th class="col-pmax-kg">Pmax (W/kg)</th>
+                            <th class="col-pmin">Pmin (W)</th>
+                            <th class="col-p5s">P 5s (W)</th>
+                            <th class="col-iu">IU (%)</th>
+                            <th class="col-prace">Práce (kJ)</th>
+                            <th class="col-prace-th">Práce/TH (J/kg)</th>
+                            <th class="col-tf">TF</th>
+                            <th class="col-la">LA</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in history %}
+                        <tr>
+                            <td>{{ entry['Date'] }}</td>
+                            <td>{% if entry['Weight']|string != 'nan' %}{{ entry['Weight']|round(1) }}{% endif %}</td>
+                            <td>{% if entry['Fat']|string != 'nan' %}{{ entry['Fat'] }}{% endif %}</td>
+                            <td>{% if entry['ATH']|string != 'nan' %}{{ entry['ATH'] }}{% endif %}</td>
+                            <td>{% if entry['PP']|string != 'nan' %}{{ entry['PP']|int }}{% endif %}</td>
+                            <td>{% if entry['PP_kg']|string != 'nan' %}{{ entry['PP_kg'] }}{% endif %}</td>
+                            <td>{% if entry['Pmin']|string != 'nan' %}{{ entry['Pmin']|int }}{% endif %}</td>
+                            <td>{% if entry['PP5s']|string != 'nan' %}{{ entry['PP5s'] }}{% endif %}</td>
+                            <td>{% if entry['IU']|string != 'nan' %}{{ entry['IU'] }}{% endif %}</td>
+                            <td>{% if entry['TotalWork_kJ']|string != 'nan' %}{{ entry['TotalWork_kJ'] }}{% endif %}</td>
+                            <td>{% if entry['Work_TH']|string != 'nan' %}{{ entry['Work_TH'] }}{% endif %}</td>
+                            <td>{% if entry['HRmax']|string != 'nan' and entry['HRmax']|int > 0 %}{{ entry['HRmax']|int }}{% endif %}</td>
+                            <td>{% if entry['LA']|string != 'nan' and entry['LA']|float > 0 %}{{ entry['LA'] }}{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+        </div>
+<div class="footer">
+    <img src="{{ logo_base64 }}" style="height: 25px; vertical-align: middle;"> 
+    Biomedicínská laboratoř UK FTVS, {{ current_year }}
+</div>
+                
+
+</div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if spiro %}
+    <div class="page-container">
+        <div class="header">
+            <div class="athlete-name">{{ athlete['Name'] }} </div>
+            <div style="font-size: 9px;">Datum měření: {{ athlete['Date_measurement'] }} | Sport: {{ sport }}</div>
+        </div>
+
+        <div class="top-container">
+            <table class="clean-table">
+                <thead>
+                    <tr>
+                        <th style="width: 15%; text-align: left;">Antropometrie</th>
+                        <th style="width: 8%; text-align: center; visibility: hidden;">Hodnota</th> 
+                        <th style="width: 10%;"></th> 
+                        <th class="v-sep" style="width: 15%; text-align: left; padding-left: 10px;">Spiroergometrie</th>
+                        <th style="width: 10%;">Absolutní</th>
+                        <th style="width: 12%;">Relativní (TH)</th>
+                        <th style="width: 10%;">% z nál. hod.</th>
+                        <th style="width: 12%;">Relativní (ATH)</th>
+                    </tr>
+                </thead>
+                    <tbody>
+                            <tr>
+                            <td class="label-left">Datum narození</td><td>{{ athlete['Birth'] }}</td><td></td>
+                            <td class="label-left v-sep" style="padding-left: 10px;">VO<sub>2</sub>max</td>
+                            <td>{% if spiro['VO2max']|string != 'nan' %}{{ spiro['VO2max'] }} l/min{% endif %}</td>
+                            <td>{% if spiro['VO2_kg']|string != 'nan' %}{{ spiro['VO2_kg'] }} ml/min/kg{% endif %}</td>
+                            <td>{% if spiro['VO2_norm_perc']|string != 'nan' %}{{ spiro['VO2_norm_perc'] }} %{% endif %}</td> 
+                            <td>{% if athlete['ATH'] and spiro['VO2max']|string != 'nan' %}{{ (spiro['VO2max']*1000/athlete['ATH'])|round(1) }} ml/min/kg{% endif %}</td>
+                        </tr>
+                        <tr>
+                            <td class="label-left">Věk</td><td>{{ athlete['Age'] }}</td><td></td>
+                            <td class="label-left v-sep" style="padding-left: 10px;">
+                                {% if spiro['is_speed'] %}Dosažená rychlost{% else %}Dosažený výkon{% endif %}
+                            </td>
+                            <td>
+                                {% if spiro['vykon'] %}
+                                    {{ spiro['vykon'] }} {% if spiro['is_speed'] %}km/h{% else %}W{% endif %}
+                                {% endif %}
+                            </td>
+                            <td>{% if not spiro['is_speed'] %}{{ spiro['vykon_kg'] }} W/kg{% endif %}</td>
+                            <td>{% if not spiro['is_speed'] %}{{ spiro['vykon_norm_perc'] }} %{% endif %}</td> 
+                            <td>{% if not spiro['is_speed'] %}{{ (spiro['vykon']/athlete['ATH'])|round(1) }} W/kg{% endif %}</td>
+                        </tr>
+                        <tr>
+                            <td class="label-left">Výška</td><td>{% if athlete['Height']|string != 'nan' %}{{ athlete['Height']|int }} cm{% endif %}</td><td></td>
+                            <td class="label-left v-sep" style="padding-left: 10px;">Tepová frekvence (max)</td>
+                            <td>{% if spiro['HRmax_Spiro']|string != 'nan' %}{{ spiro['HRmax_Spiro'] }} BPM{% endif %}</td><td></td><td></td><td></td>
+                        </tr>
+                        <tr>
+                            <td class="label-left">TH - Hmotnost</td><td>{% if athlete['Weight']|string != 'nan' %}{{ athlete['Weight']|round(1) }} kg{% endif %}</td><td></td>
+                            <td class="label-left v-sep" style="padding-left: 10px;">Tepový kyslík</td>
+                            <td>{% if spiro['tep_kyslik']|string != 'nan' %}{{ spiro['tep_kyslik'] }} ml/tep{% endif %}</td><td></td><td></td><td></td>
+                        </tr>
+                        <tr>
+                            <td class="label-left">Tuk</td><td>{% if athlete['Fat']|string != 'nan' %}{{ athlete['Fat'] }} %{% endif %}</td><td></td>
+                            <td class="label-left v-sep" style="padding-left: 10px;">Anaerobní práh</td>
+                            <td>{% if spiro['anp']|string != 'nan' %}{{ spiro['anp'] }} BPM{% endif %}</td><td></td><td></td><td></td>
+                        </tr>
+                        <tr>
+                            <td class="label-left">ATH - Aktivní hmota</td><td>{% if athlete['ATH']|string != 'nan' %}{{ athlete['ATH'] }} kg{% endif %}</td><td></td>
+                            <td class="v-sep" colspan="5"></td>
+                        </tr>
+                        <tr style="height: 12px;"><td colspan="8" style="border: none;"></td></tr>
+                        <tr>
+                            <th class="label-left" style="border-bottom: 1.5px solid #333;">Klidová ventilace</th>
+                            <th style="border-bottom: 1.5px solid #333;"></th>
+                            <th style="border-bottom: 1.5px solid #333; text-align: center;">% z nál. hod.</th> 
+                            <th class="label-left v-sep" style="border-bottom: 1.5px solid #333; padding-left: 10px;">Ventilace</th>
+                            <th style="border-bottom: 1.5px solid #333;"></th>
+                            <th style="border-bottom: 1.5px solid #333; text-align: center;">Optimum</th>
+                            <th style="border-bottom: 1.5px solid #333;"></th>
+                            <th style="border-bottom: 1.5px solid #333;"></th>
+                        </tr>
+                        <tr>
+                            <td class="label-left">FVC</td><td>{% if spiro['fvc']|string != 'nan' %}{{ spiro['fvc'] }} l{% endif %}</td><td>{% if spiro['fvc_perc']|string != 'nan' %}{{ spiro['fvc_perc'] }} %{% endif %}</td> 
+                            <td class="label-left v-sep" style="padding-left: 10px;">Minutová ventilace</td>
+                            <td>{% if spiro['min_ventilace']|string != 'nan' %}{{ spiro['min_ventilace'] }} l/min{% endif %}</td>
+                            <td>{% if spiro['min_ventilace_opt']|string != 'nan' %}{{ spiro['min_ventilace_opt'] }}{% endif %}</td><td></td><td></td>
+                        </tr>
+                        <tr>
+                            <td class="label-left">FEV1</td><td>{% if spiro['fev1']|string != 'nan' %}{{ spiro['fev1'] }} l{% endif %}</td><td>{% if spiro['fev1_perc']|string != 'nan' %}{{ spiro['fev1_perc'] }} %{% endif %}</td> 
+                            <td class="label-left v-sep" style="padding-left: 10px;">Dechová frekvence</td>
+                            <td>{% if spiro['dech_frek']|string != 'nan' %}{{ spiro['dech_frek'] }} d/min{% endif %}</td>
+                            <td>50-60</td><td></td><td></td>
+                        </tr>
+                        <tr>
+                            <td class="label-left">Poměr FVC/FEV1</td><td>{% if spiro['pomer']|string != 'nan' %}{{ spiro['pomer'] }} %{% endif %}</td><td></td>
+                            <td class="label-left v-sep" style="padding-left: 10px;">Dechový objem</td>
+                            <td>{% if spiro['dech_objem']|string != 'nan' %}{{ spiro['dech_objem'] }} l{% endif %}</td>
+                            <td></td><td></td><td></td>
+                        </tr>
+                        <tr>
+                            <td colspan="3"></td>
+                            <td class="label-left v-sep" style="padding-left: 10px;">Dechový objem %</td>
+                            <td>{% if spiro['dech_objem_perc']|string != 'nan' %}{{ spiro['dech_objem_perc'] }} %{% endif %}</td> <td>50-60</td><td></td><td></td>
+                        </tr>
+                        <tr>
+                            <td colspan="3"></td>
+                            <td class="label-left v-sep" style="padding-left: 10px;">RER</td>
+                            <td>{% if spiro['rer']|string != 'nan' %}{{ spiro['rer'] }}{% endif %}</td>
+                            <td>1.08-1.18</td><td></td><td></td>
+                        </tr>
+                        <tr>
+                            <td colspan="3"></td>
+                            <td class="label-left v-sep" style="padding-left: 10px;">Laktát (max)</td>
+                            <td>{% if athlete['LA']|string != 'nan' and athlete['LA']|float > 0 %}{{ athlete['LA'] }} mmol/l{% endif %}</td><td></td><td></td><td></td>
+                        </tr>
+                    </tbody>
+            </table>
+        </div>
+
+        <div class="bottom-container">
+            <div class="charts-section" style="flex: 1; width: 100%; margin-bottom: 10px;">
+                <div class="chart-box">
+                    <img src="{{ plots['spiro'] }}" style="width: 100%; object-position: center;">
+                </div>
+            </div>
+
+            <div class="history-section" style="flex: 0 0 auto; width: 100%;">
+                <h4>Tréninkové zóny</h4> <table class="clean-table" style="width: 100%;">
+                    <thead>
+                        <tr>
+                            <th style="text-align: left; width: 25%;">Zóna</th>
+                            <th style="text-align: center; width: 25%;">Aerobní</th>
+                            <th style="text-align: center; width: 25%;">Smíšená</th>
+                            <th style="text-align: center; width: 25%;">Anaerobní</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="label-left">Tepová frekvence (BPM)</td>
+                            <td style="text-align: center;">do {{ spiro['zones']['aer_do'] }}</td>
+                            <td style="text-align: center;">{{ spiro['zones']['smi_od'] }} – {{ spiro['zones']['smi_do'] }}</td>
+                            <td style="text-align: center;">nad {{ spiro['zones']['ana_od'] }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="footer">
+                <img src="{{ logo_base64 }}" style="height: 25px; vertical-align: middle;"> 
+                Biomedicínská laboratoř UK FTVS, {{ current_year }}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if plots['radar'] %}
+    <div class="page-container">
+        <div class="header">
+            <div class="athlete-name">{{ athlete['Name'] }} </div>
+            <div style="font-size: 9px;">Datum měření: {{ athlete['Date_measurement'] }} | Sport: {{ sport }}</div>
+        </div>
+
+        <div class="bottom-container" style="justify-content: center; align-items: center; flex: 1; display: flex; min-height: 0;">
+            <div class="chart-box" style="width: 100%; height: 100%; display: flex; justify-content: center; align-items: center;">
+                <img src="{{ plots['radar'] }}" style="height: 100%; width: auto; object-fit: contain;">
+            </div>
+        </div>
+
+        <div class="footer">
+                <img src="{{ logo_base64 }}" style="height: 25px; vertical-align: middle;"> 
+                Biomedicínská laboratoř UK FTVS, {{ current_year }}
+        </div>
+    </div>
+    {% endif %}
+
+</body>
+</html>
