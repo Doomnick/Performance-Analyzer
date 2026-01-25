@@ -3,7 +3,6 @@ os.environ["GIO_USE_VFS"] = "local"
 os.environ["G_MESSAGES_DEBUG"] = ""
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
-import traceback
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +13,7 @@ import graphics_engine
 import report_generator
 import base64
 import sys
+import shutil
 
 def get_resource_path(relative_path):
     """ Získá absolutní cestu k prostředkům (logo, atd.) uvnitř EXE i mimo něj. """
@@ -123,9 +123,16 @@ def process_individual_athlete(athlete_id, report_type, paths, sport, team, unit
         output_folder.mkdir(exist_ok=True)
         report_generator.generate_pdf_report(report_data, output_folder)
         
+        # --- NOVÉ: Úklid dočasné složky sportovce ---
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+            
         return f"ID {athlete_id}: Hotovo", report_data
 
     except Exception as e:
+        # Úklid i v případě chyby
+        if 'temp_dir' in locals() and temp_dir.exists():
+            shutil.rmtree(temp_dir)
         return f"ID {athlete_id}: Chyba - {str(e)}", None
 
 def save_aggregate_results(data_list, team, main_folder, is_single=None):
@@ -236,9 +243,16 @@ def run_multisession_generation(df_comparison, paths, sport, team, toggle_switch
     to_process = df_comparison[~df_comparison["Report"].str.contains("FAILED|Missing")].copy()
     if to_process.empty: return []
     
-    with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
+    # Omezení počtu procesů (max 6, i když máš víc jader) pro stabilitu na Windows
+    num_workers = min(6, max(1, os.cpu_count() - 1))
+    
+    executor = ProcessPoolExecutor(max_workers=num_workers)
+    try:
         worker = partial(process_individual_athlete, paths=paths, sport=sport, team=team, units_toggle=(toggle_switch == "True"))
         results_raw = list(executor.map(worker, to_process['ID'], to_process['Report']))
+    finally:
+        # Vynucené vyčištění procesů (SpawnProcess-X) hned po skončení
+        executor.shutdown(wait=True)
     
     status_messages = [res[0] for res in results_raw]
     successful_data = [res[1] for res in results_raw if res[1] is not None]

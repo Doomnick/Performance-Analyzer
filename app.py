@@ -17,6 +17,7 @@ from shiny import App, render, ui, reactive
 import processor      # Výpočty a kontrola dat
 import master_engine
 import sys
+import asyncio 
 
 
 def get_resource_path(relative_path):
@@ -58,6 +59,7 @@ app_ui = ui.page_navbar(
                 navigator.clipboard.writeText(message);
             });
         """),
+    
   ui.tags.style("""
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
             
@@ -272,8 +274,8 @@ app_ui = ui.page_navbar(
                 ),
                 
                 ui.output_ui("dynamic_spiro_ui"),
-                ui.input_select("sport", "Disciplína:", choices=["Hokej: dospělí", "Hokej: junioři", "Hokej: dorost", "Gymnastika"]),
-                ui.input_text("team", "Název týmu:", ""),
+                ui.output_ui("dynamic_config_ui"),
+                ui.output_ui("action_buttons_ui"),
                 
                 ui.output_ui("action_buttons_ui"),
                 
@@ -392,77 +394,50 @@ def server(input, output, session):
 
     @reactive.effect
     def check_updates_at_startup():
-        print("\n" + "="*45)
-        print("[INFO] Zahajuji kontrolu aktualizaci...")
+        print("\n[INFO] Kontrola aktualizace podle GitHub Release...")
         
-        # 1. Kontrola časového odstupu (1 hodina = 3600 sekund)
+        # 1. Časový zámek (3 minuty) zůstává stejný
         current_time = time.time()
         if os.path.exists(LAST_CHECK_FILE):
             try:
                 with open(LAST_CHECK_FILE, "r") as f:
-                    last_check = float(f.read().strip())
-                
-                if (current_time - last_check) < 180:
-                    remaining = int((180 - (current_time - last_check)) / 60)
-                    print(f"[SKIP] Kontrola provedena nedavno. Dalsi za: {remaining} min.")
-                    print("="*45 + "\n")
-                    return 
-            except:
-                pass 
+                    if (current_time - float(f.read().strip())) < 180: return 
+            except: pass 
 
         try:
-            # 2. Dotaz na GitHub
-            url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/app.py"
+            # 2. Dotaz na NEJNOVĚJŠÍ RELEASE
+            url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases/latest"
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             
             with urllib.request.urlopen(req) as response:
                 data = json.loads(response.read().decode())
-                remote_sha = data['sha']
+                remote_version = data['tag_name'].strip().lstrip('v') # Odstraní případné 'v' před číslem
                 
                 with open(LAST_CHECK_FILE, "w") as f:
                     f.write(str(current_time))
 
-            # 3. Načtení lokálního SHA
-            local_sha = ""
-            if os.path.exists(HASH_FILE):
-                with open(HASH_FILE, "r") as f:
-                    for line in f:
-                        if "app.py:" in line:
-                            local_sha = line.split(":")[1].strip()
+            print(f"[VERZE] Server: {remote_version} | Lokální: {APP_VERSION}")
 
-            print(f"[REMOTE] SHA: {remote_sha}")
-            print(f"[LOCAL]  SHA: {local_sha}")
-
-            if remote_sha != local_sha:
-                print("[UPDATE] Nova verze nalezena!")
-                
-                # OPRAVA: Definice objektu 'm' před jeho zobrazením
+            # 3. Porovnání verze
+            if remote_version != APP_VERSION:
+                print("[UPDATE] Nalezena nová verze Release!")
                 m = ui.modal(
                     ui.tags.div(
-                        ui.h4("🚀 K dispozici je nová verze!"),
-                        ui.p("Chcete nyní stáhnout aktualizaci? Aplikace se vypne a spustí aktualizační proces."),
+                        ui.h4(f"🚀 Nová verze {remote_version} je připravena!"),
+                        ui.p(f"Vaše aktuální verze je {APP_VERSION}. Chcete aktualizovat?"),
                         style="padding: 10px;"
                     ),
-                    title="Aktualizace systému",
+                    title="Nalezena aktualizace",
                     footer=ui.tags.div(
-                        ui.input_action_button("confirm_update", "Aktualizovat nyní", class_="btn-primary"),
+                        ui.input_action_button("confirm_update", "Aktualizovat", class_="btn-primary"),
                         ui.modal_button("Zrušit"),
                     ),
                     easy_close=False
                 )
                 ui.modal_show(m)
-            else:
-                print("[OK] Aplikace je aktualni.")
 
-        except urllib.error.HTTPError as e:
-            if e.code == 403:
-                print("[LIMIT] GitHub API limit dosazen. Zkuste to za hodinu.")
-            else:
-                print(f"[CHYBA] HTTP {e.code}")
         except Exception as e:
-            print(f"[CHYBA] Kontrola selhala: {e}")
-        
-        print("="*45 + "\n")
+            print(f"[CHYBA] Kontrola Release selhala: {e}")
 
     # Reakce na kliknutí na "Aktualizovat nyní"
     @reactive.effect
@@ -489,30 +464,55 @@ def server(input, output, session):
     def trigger_analysis():
         paths = detected_paths.get()
         if not paths: return
+        
+        # Resetujeme výběr, ale bez spinnerů a oken
+        selected_id.set(None)
+        
         cur_in = {"wingate": paths["wingate"] is not None, "spirometrie": paths["spiro"] is not None, "srovnani": paths["srovnani"] is not None, "srovnani2": paths["srovnani2"] is not None}
         last_analysis_inputs.set(cur_in)
         try:
+            #build_comparison_df běží synchronně, jak jste chtěl
             df = processor.build_comparison_df(paths, cur_in)
             comparison_data.set(df)
-        except Exception as e: ui.notification_show(f"Chyba: {e}", type="error")
+        except Exception as e: 
+            ui.notification_show(f"Chyba při skenování: {e}", type="error")
 
     def perform_full_scan():
         base_path = main_folder_path.get()
         if not base_path or not os.path.exists(base_path): return
         try:
             all_dirs = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))]
-            som_p = next((os.path.join(base_path, d) for d in all_dirs if d.lower().startswith("somato")), None)
+            
+            # Upravená detekce pro Antropometrii (přidáno 'antropo')
+            som_p = next((os.path.join(base_path, d) for d in all_dirs if d.lower().startswith(("somato", "antropo"))), None)
+            
             win_p = next((os.path.join(base_path, d) for d in all_dirs if d.lower().startswith("wingate")), None)
-            spi_p = next((os.path.join(base_path, d) for d in all_dirs if d.lower().startswith("spiro")), None)
+            
+            # Upravená detekce pro Spirometrii (přidáno 'vo2')
+            spi_p = next((os.path.join(base_path, d) for d in all_dirs if d.lower().startswith(("spiro", "vo2"))), None)
+            
             sr_p, sr2_p = None, None
             if win_p:
                 subs = [d for d in os.listdir(win_p) if os.path.isdir(os.path.join(win_p, d))]
                 if "srovnani" in subs: sr_p = os.path.join(win_p, "srovnani")
                 if "srovnani2" in subs: sr2_p = os.path.join(win_p, "srovnani2")
+            
             detected_paths.set({"antropometrie": som_p, "wingate": win_p, "spiro": spi_p, "srovnani": sr_p, "srovnani2": sr2_p})
             trigger_analysis()
         except: pass
 
+    @render.ui
+    def dynamic_config_ui():
+        if not main_folder_path.get():
+            return None
+            
+        return ui.div(
+            ui.input_select("sport", "Kategorie:", 
+                            choices=["Hokej: dospělí", "Hokej: junioři", "Hokej: dorost", "Gymnastika"]),
+            ui.input_text("team", "Název týmu:", ""),
+            style="margin-top: 10px;"
+        )
+    
     @render.ui
     def action_buttons_ui():
         if not main_folder_path.get(): return None
@@ -565,9 +565,9 @@ def server(input, output, session):
             ui.h6("Pravidla automatické detekce:"),
             ui.p("Pro úspěšnou detekci stačí, aby názvy podsložek v hlavní složce začínaly těmito slovy. Nezáleží na velikosti písmen:"),
             ui.tags.ul(
-                ui.tags.li(ui.tags.b("Somato..."), " : Pro antropometrii. Musí obsahovat Excel s listem 'Data_Sheet'."),
+                ui.tags.li(ui.tags.b("Somato.../Antropo..."), " : Pro antropometrii. Musí obsahovat Excel s listem 'Data_Sheet'."),
                 ui.tags.li(ui.tags.b("Wingate..."), " : Pro wingate testy. Obsahuje .txt soubory pojmenované dle ID."),
-                ui.tags.li(ui.tags.b("Spiro..."), " : Pro spirometrii. Obsahuje .xlsx soubory pojmenované dle ID."),
+                ui.tags.li(ui.tags.b("Spiro.../Vo2..."), " : Pro spirometrii. Obsahuje .xlsx soubory pojmenované dle ID."),
                 ui.tags.li(ui.tags.b("srovnani / srovnani2"), " : Volitelné podsložky (musí se jmenovat přesně takto) umístěné uvnitř složky Wingate.")
             ),
             ui.hr(),
@@ -619,62 +619,80 @@ def server(input, output, session):
     @reactive.event(input.check)
     def _manual_refresh(): trigger_analysis()
 
+ 
+    is_generating = reactive.Value(False)  # add once in server scope
+
+    
     @reactive.effect
     @reactive.event(input.generate_pdf)
-    def _generate():
+    async def _generate():
         df = comparison_data.get()
-        if df is None or df.empty: return
+        if df is None or df.empty:
+            return
+
+        # Sběr dat
+        paths_local = detected_paths.get().copy() if detected_paths.get() else {}
+        paths_local['main_folder'] = main_folder_path.get()
+        sport_local = input.sport()
+        team_local = input.team()
+        t_switch_local = input.toggle_switch() if "toggle_switch" in input else "False"
+
+        # 1. AKTIVNÍ ZOBRAZENÍ MODÁLU DO POPŘEDÍ
+        ui.modal_show(ui.modal(
+            ui.div(
+                ui.tags.img(
+                    src="loading.gif", 
+                    style="width: 100%; height: auto; display: block; border-radius: 4px;"
+                ),
+                # Negativní margin vyruší výchozí padding (15px) těla modálu
+                style="margin: -16px; border: none; overflow: hidden;" 
+            ),
+            title=None,
+            easy_close=False,
+            footer=None,
+            size="s"  # Velikost "s" (small) je pro samotný GIF nejvhodnější
+        ))
         
-        # Reset starých cest před novým generováním
-        last_wingate_path.set(None)
-        last_spiro_path.set(None)
-        
-        ui.update_navset("main_nav", selected="📝 Výsledky")
-        gen_id = ui.notification_show("Spouštím hromadné generování...", duration=None, type="message")
-        
+        is_generating.set(True)
+        gen_id = ui.notification_show("⏳ Generuji reporty...", duration=None, type="message")
+
         try:
-            with ui.Progress(min=0, max=1) as p:
-                p.set(message="Generuji reporty a tabulky...", detail="Zpracovávám grafy...")
-                
-                paths = detected_paths.get()
-                paths['main_folder'] = main_folder_path.get()
-                t_switch = input.toggle_switch() if "toggle_switch" in input else "False"
-                
-                # Volání engine
-                results = master_engine.run_multisession_generation(df, paths, input.sport(), input.team(), t_switch)
-                p.set(0.8, detail="Ukládám cesty k souborům...")
+            # Výpočet v pozadí
+            results = await asyncio.to_thread(
+                master_engine.run_multisession_generation,
+                df, paths_local, sport_local, team_local, t_switch_local,
+            )
 
-                # --- JEDNOTNÉ A ROBUSTNÍ ZPRACOVÁNÍ CEST ---
-                log_entries = []
-                results_list = results if isinstance(results, list) else str(results).splitlines()
+            # Zpracování výsledků
+            log_entries = []
+            last_w, last_s = None, None
+            results_list = results if isinstance(results, list) else str(results).splitlines()
+            for r in results_list:
+                log_entries.append(r)
+                r_low = r.lower()
+                if "✅" in r and ("vysledky" in r_low or "výsledky" in r_low) and "v:" in r:
+                    path = os.path.abspath(r.split("v:")[1].strip())
+                    if os.path.exists(path):
+                        if "wingate" in r_low: last_w = path
+                        elif "spiro" in r_low: last_s = path
 
-                for r in results_list:
-                    log_entries.append(r)
-                    r_low = r.lower()
-
-                    # Hledáme indikátor úspěchu a složku výsledků (s diakritikou i bez)
-                    if "✅" in r and ("vysledky" in r_low or "výsledky" in r_low):
-                        try:
-                            # Rozdělíme řetězec v místě "v:" a vezmeme absolutní cestu
-                            if "v:" in r:
-                                path = os.path.abspath(r.split("v:")[1].strip())
-                                if os.path.exists(path):
-                                    if "wingate" in r_low:
-                                        last_wingate_path.set(path)
-                                    elif "spiro" in r_low:
-                                        last_spiro_path.set(path)
-                        except Exception as e:
-                            print(f"[ERROR] Selhalo parsování cesty: {e}")
-
-                gen_log.set("\n".join(log_entries))
-                ui.notification_remove(gen_id)
-                ui.notification_show("Generování dokončeno.", type="default", duration=7)
+            # Aktualizace UI
+            ui.update_navset("main_nav", selected="📝 Výsledky")
+            gen_log.set("\n".join(log_entries))
+            if last_w: last_wingate_path.set(last_w)
+            if last_s: last_spiro_path.set(last_s)
             
+            ui.notification_show("Generování dokončeno.", type="default", duration=7)
+
         except Exception as e:
-            ui.notification_remove(gen_id)
             ui.notification_show(f"Chyba při generování: {e}", type="error")
-            old_log = gen_log.get()
-            gen_log.set(f"[KRITICKÁ CHYBA] {str(e)}\n\n" + old_log)
+            gen_log.set(f"[KRITICKÁ CHYBA] {e}\n\n" + gen_log.get())
+
+        finally:
+            # 2. AUTOMATICKÉ ODSTRANĚNÍ MODÁLU A NOTIFIKACE
+            ui.modal_remove()
+            ui.notification_remove(gen_id)
+            is_generating.set(False)
 
     @reactive.effect
     @reactive.event(input.go_single_report)
@@ -782,17 +800,22 @@ def server(input, output, session):
         if not id_val or df is None: return None
         
         row = df[df["ID"] == id_val]
+        if row.empty:
+            # OPRAVA: Resetování ID děláme izolovaně, aby nevznikla reaktivní smyčka
+            with reactive.isolate():
+                selected_id.set(None)
+            return None
+            
         report_status = row["Report"].values[0] 
         
-        # Detekce dostupnosti dat (✅ / ❌)
+        # Detekce dostupnosti dat pro každou sekci
+        ha = row["Antropometrie"].values[0] == "✅"  # Přidána detekce pro Antropo
         hw = row["Wingate"].values[0] == "✅"
         hs = row["Spirometrie"].values[0] == "✅"
         h1 = row["Srovnání 1"].values[0] == "✅"
         h2 = row["Srovnání 2"].values[0] == "✅"
         
         is_failed = "FAILED" in report_status
-        
-        # VYVÁŽENÝ STYL: písmo akorát, odsazení mírně zmenšené pro úsporu místa
         btn_style = "font-size: 0.82rem; padding: 3px 10px;"
         
         return ui.div(
@@ -801,8 +824,8 @@ def server(input, output, session):
                 ui.div(ui.strong(f"👤 {id_val}:"), 
                     ui.input_action_link("copy_id", "📋 Kopírovat ID", class_="action-link", style="margin-left:10px;")),
                 ui.div(
-                    # Plné názvy zachovány, styl aplikován individuálně
-                    ui.input_action_button("go_antro", "Antropometrie", class_="btn-sm btn-outline-primary", style=btn_style),
+                    # Nyní jsou všechna tlačítka podmíněná
+                    ui.input_action_button("go_antro", "Antropometrie", class_="btn-sm btn-outline-primary", style=btn_style) if ha else None,
                     ui.input_action_button("go_win", "Wingate", class_="btn-sm btn-outline-primary", style=btn_style) if hw else None,
                     ui.input_action_button("go_srov1", "Srovnání 1", class_="btn-sm btn-outline-primary", style=btn_style) if h1 else None,
                     ui.input_action_button("go_srov2", "Srovnání 2", class_="btn-sm btn-outline-primary", style=btn_style) if h2 else None,
@@ -815,7 +838,6 @@ def server(input, output, session):
                         style="margin-left: auto; font-size: 0.82rem; padding: 3px 12px;",
                         disabled=is_failed
                     ),
-                    # Flex-wrap: wrap povolen, aby se při extrémně dlouhém ID tlačítka bezpečně zalomila
                     style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; align-items: center;"
                 ), class_="selection-card"
             ),
@@ -895,9 +917,15 @@ def server(input, output, session):
     def _handle_selection():
         ix = input.data_preview_selected_rows()
         df = comparison_data.get()
-        if df is not None and ix: selected_id.set(df.iloc[ix[0]]["ID"])
-        else: selected_id.set(None)
-
+        # KLÍČOVÁ OCHRANA: Pokud index ix[0] neexistuje v novém df (po přejmenování), nic nedělej
+        if df is not None and not df.empty and ix and ix[0] < len(df):
+            try:
+                selected_id.set(df.iloc[ix[0]]["ID"])
+            except:
+                selected_id.set(None)
+        else:
+            selected_id.set(None)
+            
 app = App(app_ui, server, static_assets=get_resource_path("."))
 
 
@@ -908,14 +936,17 @@ def run_shiny(): uvicorn.run(app, host="127.0.0.1", port=8080, log_level="error"
 if __name__ == "__main__":
     import multiprocessing
     import threading
+    # KLÍČOVÁ ZMĚNA: Vynucení čistého startu procesů pro Windows
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
+        
     multiprocessing.freeze_support()
     
-    # 1. Spustíme Shiny server v samostatném vlákně
-    # Tato funkce (pravděpodobně run_shiny) spouští Uvicorn na pozadí
+    # Zbytek zůstává stejný...
     threading.Thread(target=run_shiny, daemon=True).start()
     
-    # 2. Vytvoříme okno přímo s cílovou URL adresou
-    # Místo parametru 'html' nyní používáme 'url'
     window = webview.create_window(
         "Performance Analyzer", 
         url="http://127.0.0.1:8080", 
@@ -923,6 +954,4 @@ if __name__ == "__main__":
         height=920
     )
     
-    # 3. Spustíme samotné zobrazení okna s ikonou
-    # Funkce get_resource_path zajistí správné načtení ikony i v EXE režimu
     webview.start(icon=get_resource_path("logo.ico"))

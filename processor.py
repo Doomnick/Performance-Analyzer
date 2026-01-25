@@ -97,7 +97,9 @@ def load_athlete_info(somato_folder, athlete_id):
     df_somato['ID'] = df_somato['ID'].astype(str).str.strip()
     athlete_data = df_somato[df_somato['ID'] == str(athlete_id)].copy()
     if athlete_data.empty: return None
-    date_col = 'Date_measurement' if 'Date_measurement' in athlete_data.columns else 'Date'
+    date_col = 'Date_measurement' if 'Date_measurement' in df_somato.columns else None
+    if date_col:
+        df_somato[date_col] = pd.to_datetime(df_somato[date_col], dayfirst=True, errors='coerce')
     athlete_data[date_col] = pd.to_datetime(athlete_data[date_col], errors='coerce')
     athlete_data = athlete_data.sort_values(by=date_col, ascending=True)
     latest = athlete_data.iloc[-1]
