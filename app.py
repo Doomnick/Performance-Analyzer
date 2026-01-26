@@ -28,7 +28,7 @@ def get_resource_path(relative_path):
     return os.path.join(os.path.abspath("."), relative_path)  # Paralelní generování PD
 
 # Konfigurace pro kontrolu (odpovídá vašemu GitHubu)
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.01"
 GITHUB_USER = "Doomnick"
 GITHUB_REPO = "Performance-Analyzer"
 HASH_FILE = "file_hashes.txt"
