@@ -18,6 +18,7 @@ import processor      # Výpočty a kontrola dat
 import master_engine
 import sys
 import asyncio 
+import socket
 
 
 def get_resource_path(relative_path):
@@ -928,15 +929,25 @@ def server(input, output, session):
             
 app = App(app_ui, server, static_assets=get_resource_path("."))
 
+def find_free_port(start_port=8080):
+    port = start_port
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                # Zkusíme se na port "přilepit"
+                s.bind(("127.0.0.1", port))
+                return port
+            except socket.error:
+                # Pokud je obsazen, zkusíme o 1 vyšší
+                port += 1
 
-
-def run_shiny(): uvicorn.run(app, host="127.0.0.1", port=8080, log_level="error")
-
+def run_shiny(port): 
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="error")
 
 if __name__ == "__main__":
     import multiprocessing
     import threading
-    # KLÍČOVÁ ZMĚNA: Vynucení čistého startu procesů pro Windows
+    
     try:
         multiprocessing.set_start_method('spawn', force=True)
     except RuntimeError:
@@ -944,12 +955,17 @@ if __name__ == "__main__":
         
     multiprocessing.freeze_support()
     
-    # Zbytek zůstává stejný...
-    threading.Thread(target=run_shiny, daemon=True).start()
+    # --- DYNAMICKÉ HLEDÁNÍ PORTU ---
+    selected_port = find_free_port(8080)
+    print(f"[INFO] Startuji server na portu: {selected_port}")
     
+    # Předáme port do vlákna serveru
+    threading.Thread(target=run_shiny, args=(selected_port,), daemon=True).start()
+    
+    # Použijeme f-string pro dynamickou URL adresu okna
     window = webview.create_window(
         "Performance Analyzer", 
-        url="http://127.0.0.1:8080", 
+        url=f"http://127.0.0.1:{selected_port}", 
         width=1280, 
         height=920
     )
