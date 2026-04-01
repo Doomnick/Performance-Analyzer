@@ -30,21 +30,17 @@ def create_wingate_plot(history_data, output_path):
         color = colors.get(label, "grey")
         date_str = test.get("Date", label)
         
-        # Očištění dat od chybějících hodnot
-        df_clean = df.dropna(subset=['sec', p_col])
-        
-        # --- NOVÉ: LOESS Vyhlazení pro Wingate ---
-        # frac=0.1 je ideální pro 30s test, aby zůstal zachován Peak Power
-        smoothed = lowess(df_clean[p_col], df_clean['sec'], frac=0.07)
-        x_new = smoothed[:, 0]
-        y_smooth = smoothed[:, 1]
-
+        # --- OPRAVA: POUŽÍVÁME PŘEDVYPOČTENÝ SPLINE (RM5) ---
         if label == "Aktuální":
+            # Hrubá data (šedá čárkovaná)
             ax.plot(df['sec'], df[p_col], color='grey', alpha=0.2, linestyle='--', label='hrubá data')
+            # Průměrná linka
             ax.axhline(df[p_col].mean(), color='blue', linestyle='--', alpha=0.4, linewidth=2, label='průměr')
-            ax.plot(x_new, y_smooth, color='black', linewidth=4, label=f"vyhlazená data, {date_str}")
+            # VYHLAZENÝ KOPEČEK (černá tlustá čára)
+            ax.plot(df['sec'], df['RM5'], color='black', linewidth=4, label=f"vyhlazená data, {date_str}")
         else:
-            ax.plot(x_new, y_smooth, color=color, linewidth=2.5, label=date_str)
+            # Srovnávací testy (oranžová/fialová) také pomocí RM5
+            ax.plot(df['sec'], df['RM5'], color=color, linewidth=2.5, label=date_str)
 
     # Styling os a nadpisů
     ax.set_title("Anaerobní Wingate test - 30 s", fontsize=20, fontweight='bold', pad=20, loc='left', x=-0.07)

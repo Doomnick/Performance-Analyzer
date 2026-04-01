@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import io
+from scipy.interpolate import UnivariateSpline
 
 # --- POMOCNÉ FUNKCE ---
 
@@ -169,10 +170,30 @@ def process_single_wingate_file(file_path):
     indices.append(len(df))
     radky5s = int(round(np.mean(np.diff(indices)))) if len(indices) > 1 else 1
     
-    df['RM5'] = df[p_col_raw].rolling(window=radky5s).mean()
+    df_avg = df.groupby('sec')[p_col_raw].mean().reset_index()
+    x_unique = df_avg['sec'].values
+    y_unique = df_avg[p_col_raw].values
+
+    # 2. Výpočet spline (s=1e6 odpovídá hladkému kopečku jako v R)
+    spline = UnivariateSpline(x_unique, y_unique, s=300000) 
+    df['RM5'] = spline(df['sec'].values)
+    
+    # 3. Původní statistiky (zůstávají stejné)
+    df['AvP_dopocet'] = df[p_col_raw].expanding().mean()
     df['AvP_dopocet'] = df[p_col_raw].expanding().mean()
     
-    pp = round(df[p_col_raw].max(), 0)
+# --- VÝPOČET PP JAKO PRŮMĚR ZE DVOU BODŮ ---
+    # Najdeme index, kde je absolutní maximum
+    max_idx = df[p_col_raw].idxmax()
+    
+    # Ověříme, zda za maximem existuje další hodnota (ochrana proti konci souboru)
+    if max_idx + 1 < len(df):
+        val_max = df[p_col_raw].iloc[max_idx]
+        val_next = df[p_col_raw].iloc[max_idx + 1]
+        pp = round((val_max + val_next) / 2, 0)
+    else:
+        # Pokud by maximum bylo na posledním řádku, vezmeme jen to maximum
+        pp = round(df[p_col_raw].max(), 0)
     minp = round(df[p_col_raw].iloc[len(df)//2:].min(), 0)
     pp5s, minp5s = round(df['RM5'].max(), 1), round(df['RM5'].min(), 1)
     avgp = round(df[p_col_raw].mean(), 1)
@@ -369,10 +390,12 @@ def process_radar_data(athlete, wingate, spiro, norms):
     an_cap = wingate['TotalWork_J'] / athlete['Weight']
     hg_anckg = round((an_cap / norms.get('ANC', 1)) * 100, 1)
     hg_ppkg = round((wingate['PP_th'] / norms.get('Pmax', 1)) * 100, 1)
-    
-    # 2. Skokanská část (SJ)
     sj = athlete.get('SJ', 0)
-    hg_sj = round((sj / norms.get('SJ', 1)) * 100, 1) if sj else None
+    # 2. Skokanská část (SJ)
+    if pd.isna(sj) or sj == 0:
+        hg_sj = None
+    else:
+        hg_sj = round((sj / norms.get('SJ', 1)) * 100, 1)
 
     # 3. Aerobní část (Spiro) - PŘIDÁNA OCHRANA PROTI CHYBĚJÍCÍM DATŮM
     hg_vo2max = 0
