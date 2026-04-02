@@ -175,11 +175,10 @@ def process_single_wingate_file(file_path):
     y_unique = df_avg[p_col_raw].values
 
     # 2. Výpočet spline (s=1e6 odpovídá hladkému kopečku jako v R)
-    spline = UnivariateSpline(x_unique, y_unique, s=300000) 
+    spline = UnivariateSpline(x_unique, y_unique, s=400000)
     df['RM5'] = spline(df['sec'].values)
     
     # 3. Původní statistiky (zůstávají stejné)
-    df['AvP_dopocet'] = df[p_col_raw].expanding().mean()
     df['AvP_dopocet'] = df[p_col_raw].expanding().mean()
     
 # --- VÝPOČET PP JAKO PRŮMĚR ZE DVOU BODŮ ---
@@ -258,6 +257,17 @@ def prepare_spiro_raw_data(df):
     
     # 4. Výpočet VT_5s (plovoucí průměr) pro tabulkové hodnoty
     df['VT_5s'] = df['VT'].rolling(window=5, min_periods=1, center=False).mean()
+
+    if 'TF' in df.columns and len(df) > 5:
+        # Odstraníme případné řádky s chybějícím tepem pro výpočet
+        clean_df = df.dropna(subset=['TF', 'rel_time'])
+        
+        # s=1000 je pro tep (hodnoty 60-200) rozumný začátek pro lehké uhlazení.
+        # Čím vyšší 's', tím bude křivka hladší (méně kopíruje surová data).
+        spl = UnivariateSpline(clean_df['rel_time'], clean_df['TF'], s=20)
+        
+        # Přepíšeme původní TF hodnoty vyhlazenou křivkou
+        df['TF'] = spl(df['rel_time'])
     
     return df
 
