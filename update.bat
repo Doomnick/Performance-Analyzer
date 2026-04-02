@@ -18,7 +18,7 @@ timeout /t 3 /nobreak > nul
 
 :: 2. Rychlé stahování přes curl
 echo [2/5] Stahuji aktualizacni balicek...
-curl -L "https://github.com/%USER%/%REPO%/releases/latest/download/%ZIP_NAME%" -o "%ZIP_NAME%"
+curl --ssl-no-revoke -L "https://github.com/%USER%/%REPO%/releases/latest/download/%ZIP_NAME%" -o "%ZIP_NAME%"
 
 if %ERRORLEVEL% neq 0 (
     echo.
